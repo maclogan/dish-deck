@@ -99,6 +99,11 @@ kubectl -n dish-deck get pods -w
 ```
 
 - In `.env`, use Mealie's in-cluster address, e.g. `MEALIE_URL=http://mealie.mealie.svc.cluster.local:9000` (service `mealie` in namespace `mealie`).
+- **Update to the newest version** (after GitHub Actions finishes building `main`). This is a rolling restart: the new pod starts before the old one stops.
+  ```bash
+  kubectl -n dish-deck rollout restart deploy/dish-deck
+  kubectl -n dish-deck rollout status deploy/dish-deck
+  ```
 - After editing `.env`, update the Secret and restart:
   ```bash
   kubectl -n dish-deck create secret generic dish-deck-env --from-env-file=.env --dry-run=client -o yaml | kubectl apply -f -

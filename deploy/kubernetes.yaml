@@ -5,6 +5,9 @@
 #   kubectl -n dish-deck create secret generic dish-deck-env --from-env-file=.env
 #   kubectl apply -f deploy/kubernetes.yaml
 #
+# To update to the newest image (after a push to main has finished building):
+#   kubectl -n dish-deck rollout restart deploy/dish-deck
+#
 # To change settings later, recreate the secret and restart:
 #   kubectl -n dish-deck create secret generic dish-deck-env --from-env-file=.env --dry-run=client -o yaml | kubectl apply -f -
 #   kubectl -n dish-deck rollout restart deploy/dish-deck
@@ -35,9 +38,12 @@ spec:
       containers:
         - name: dish-deck
           image: ghcr.io/maclogan/dish-deck:latest
+          # Always: every restart checks GHCR for a newer :latest, so updating is just
+          #   kubectl -n dish-deck rollout restart deploy/dish-deck
+          # To pin a release instead, use e.g. ghcr.io/maclogan/dish-deck:0.2.0
           # If you build the image yourself and import it into the cluster
           # (e.g. `microk8s images import`), set image: dish-deck:local and imagePullPolicy: Never.
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           envFrom:
             - secretRef:
                 name: dish-deck-env
