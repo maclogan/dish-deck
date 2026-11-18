@@ -104,6 +104,12 @@ kubectl -n dish-deck get pods -w
   kubectl -n dish-deck rollout restart deploy/dish-deck
   kubectl -n dish-deck rollout status deploy/dish-deck
   ```
+- **Automatic updates (optional):** install [Keel](https://keel.sh) once, and every new `:latest` image rolls out within about a minute of being published. The manifest already carries Keel's annotations, so no other changes are needed.
+  ```bash
+  helm repo add keel https://charts.keel.sh && helm repo update
+  helm upgrade --install keel keel/keel --namespace keel --create-namespace --set helmProvider.enabled=false
+  ```
+  (On MicroK8s use `microk8s helm`.) The GHCR package must be public, or Keel needs registry credentials.
 - After editing `.env`, update the Secret and restart:
   ```bash
   kubectl -n dish-deck create secret generic dish-deck-env --from-env-file=.env --dry-run=client -o yaml | kubectl apply -f -

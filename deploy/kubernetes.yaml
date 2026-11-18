@@ -22,6 +22,13 @@ metadata:
   namespace: dish-deck
   labels:
     app: dish-deck
+  annotations:
+    # Optional auto-updates with Keel (https://keel.sh). Ignored if Keel isn't installed.
+    # Keel checks GHCR every minute and rolls out a new :latest as soon as it's published.
+    keel.sh/policy: force
+    keel.sh/match-tag: "true"
+    keel.sh/trigger: poll
+    keel.sh/pollSchedule: "@every 1m"
 spec:
   replicas: 1
   selector:
