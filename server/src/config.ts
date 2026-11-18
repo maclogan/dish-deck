@@ -63,6 +63,30 @@ const DEFAULT_STAPLES = [
 
 const PLAN_STARTS = ["today", "tomorrow", "monday", "sunday"] as const;
 
+/**
+ * Clean a raw value. Node's .env loader strips quotes and trailing comments, but other loaders
+ * (notably `kubectl create secret --from-env-file`) keep them literally, so handle both here.
+ */
+export function cleanValue(raw: string | undefined): string | undefined {
+  if (raw === undefined) return undefined;
+  let v = raw.trim();
+  const quoted = /^(['"])(.*)\1$/.exec(v);
+  if (quoted) v = quoted[2]!;
+  else v = v.replace(/\s+#.*$/, ""); // unquoted value followed by "  # comment"
+  v = v.trim();
+  return v ? v : undefined;
+}
+
+function urlProblem(name: string, value: string): string | undefined {
+  if (!/^https?:\/\//i.test(value)) return `${name} must start with http:// or https:// (got ${JSON.stringify(value)})`;
+  try {
+    new URL("/api", value);
+    return undefined;
+  } catch {
+    return `${name} isn't a valid URL (got ${JSON.stringify(value)}); check for typos, spaces or an extra port`;
+  }
+}
+
 function isValidTimezone(tz: string) {
   try {
     new Intl.DateTimeFormat("en-US", { timeZone: tz });
@@ -76,16 +100,22 @@ function isValidTimezone(tz: string) {
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const here = path.dirname(fileURLToPath(import.meta.url));
   const problems: string[] = [];
-  const get = (name: string) => {
-    const v = env[name]?.trim();
-    return v ? v : undefined;
-  };
+  const get = (name: string) => cleanValue(env[name]);
 
   const mealieUrl = get("MEALIE_URL")?.replace(/\/+$/, "");
   const mealieToken = get("MEALIE_TOKEN");
   if (!mealieUrl) problems.push("MEALIE_URL is required (e.g. http://mealie:9000)");
-  else if (!/^https?:\/\//.test(mealieUrl)) problems.push("MEALIE_URL must start with http:// or https://");
+  else {
+    const p = urlProblem("MEALIE_URL", mealieUrl);
+    if (p) problems.push(p);
+  }
   if (!mealieToken) problems.push("MEALIE_TOKEN is required (Mealie > your profile > API Tokens)");
+  else if (/\s/.test(mealieToken)) problems.push("MEALIE_TOKEN contains spaces or line breaks; paste it again as one line");
+  for (const name of ["MEALIE_PUBLIC_URL", "MEALDB_BASE_URL"]) {
+    const v = get(name);
+    const p = v ? urlProblem(name, v) : undefined;
+    if (p) problems.push(p);
+  }
 
   const planStart = (get("PLAN_START") ?? "today").toLowerCase();
   if (!PLAN_STARTS.includes(planStart as (typeof PLAN_STARTS)[number])) {

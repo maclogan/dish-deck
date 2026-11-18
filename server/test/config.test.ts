@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { ConfigError, loadConfig, loadEnvFile } from "../src/config.js";
+import { cleanValue, ConfigError, loadConfig, loadEnvFile } from "../src/config.js";
 
 const valid = { MEALIE_URL: "http://mealie:9000/", MEALIE_TOKEN: "abc", TZ: "America/Chicago" };
 
@@ -41,6 +41,31 @@ describe("loadConfig", () => {
       const msg = (err as Error).message;
       for (const name of ["MEALIE_URL", "MEALIE_TOKEN", "TZ", "PLAN_START", "BUSY_DAYS", "PORT"]) expect(msg).toContain(name);
     }
+  });
+});
+
+describe("values written for other loaders (kubectl --from-env-file keeps them literally)", () => {
+  it("strips surrounding quotes and trailing comments", () => {
+    expect(cleanValue('"http://mealie:9000"')).toBe("http://mealie:9000");
+    expect(cleanValue("'abc def'")).toBe("abc def");
+    expect(cleanValue("http://mealie:9000   # internal address")).toBe("http://mealie:9000");
+    expect(cleanValue("  value\r")).toBe("value");
+    expect(cleanValue('""')).toBeUndefined();
+    expect(cleanValue("p#ss")).toBe("p#ss");
+  });
+
+  it("accepts quoted values in config", () => {
+    const c = loadConfig({ MEALIE_URL: '"http://mealie.mealie.svc.cluster.local:9000"', MEALIE_TOKEN: "'tok'", TZ: '"America/Denver"' });
+    expect(c.mealieUrl).toBe("http://mealie.mealie.svc.cluster.local:9000");
+    expect(c.mealieToken).toBe("tok");
+    expect(c.timezone).toBe("America/Denver");
+  });
+
+  it("rejects URLs that would fail at request time, showing the value", () => {
+    expect(() => loadConfig({ ...valid, MEALIE_URL: "http://mealie:90000" })).toThrow(/MEALIE_URL isn't a valid URL \(got "http:\/\/mealie:90000"\)/);
+    expect(() => loadConfig({ ...valid, MEALIE_URL: "http://mea lie:9000" })).toThrow(/MEALIE_URL/);
+    expect(() => loadConfig({ ...valid, MEALIE_PUBLIC_URL: "meals.example.com" })).toThrow(/MEALIE_PUBLIC_URL must start/);
+    expect(() => loadConfig({ ...valid, MEALIE_TOKEN: "abc def" })).toThrow(/MEALIE_TOKEN contains spaces/);
   });
 });
 
