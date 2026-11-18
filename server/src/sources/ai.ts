@@ -1,16 +1,21 @@
 // AI recipe ideas via the Claude API (Messages API with a forced tool call for structured output).
 
 import Anthropic from "@anthropic-ai/sdk";
-import { dietLabel, goalPrompt, mealLabel } from "../filters.js";
+import { dietLabel, goalPrompt, isMainMeal, mealLabel } from "../filters.js";
 import type { Card, DietId, GoalId, MealFilter, MealType, Nutrition } from "../types.js";
 import { slugify } from "../util.js";
 
 export interface AiRequest {
   mood?: string;
-  cuisine?: string;
-  category?: string;
+  /** Any of these cuisines. */
+  cuisines?: string[];
+  /** Any of these dish types. */
+  categories?: string[];
+  /** Must satisfy all of these. */
   dietary?: DietId[];
-  meal?: MealFilter;
+  /** Any of these meals. */
+  meals?: MealFilter[];
+  /** Each recipe should meet at least one. */
   goals?: GoalId[];
   count: number;
   /** On-hand food names to build around, when the user asked for that. */
@@ -104,17 +109,29 @@ export class AiRecipes {
   }
 
   async generate(req: AiRequest): Promise<Card[]> {
-    const mainMeal = !req.meal || req.meal === "lunch" || req.meal === "dinner";
-    const forWhat = !req.meal ? "lunch or dinner" : req.meal === "snack" ? "a snack or appetizer" : mealLabel(req.meal).toLowerCase();
+    const meals = req.meals ?? [];
+    const cuisines = req.cuisines ?? [];
+    const categories = req.categories ?? [];
+    const goals = req.goals ?? [];
+    // Lunch/dinner dishes go on the meal plan; breakfast, dessert and snacks keep their own category.
+    const mainMeal = !meals.length || meals.some(isMainMeal);
+    const mealWord = (m: MealFilter) => (m === "snack" ? "a snack or appetizer" : mealLabel(m).toLowerCase());
+    const forWhat = meals.length ? meals.map(mealWord).join(" or ") : "lunch or dinner";
+    const anyOf = (xs: string[]) => (xs.length > 1 ? `any of ${xs.join(", ")} (mix them up)` : xs[0]);
     const lines = [
       `Suggest ${req.count} distinct recipes ${this.household} would enjoy for ${forWhat}.`,
+      meals.length > 1 ? "Spread the recipes across those meals." : "",
       req.mood ? `They're in the mood for: "${req.mood}".` : "",
-      req.cuisine ? `Cuisine: ${req.cuisine}.` : "",
-      req.category ? `Type of dish: ${req.category}.` : "",
+      cuisines.length ? `Cuisine: ${anyOf(cuisines)}.` : "",
+      categories.length ? `Type of dish: ${anyOf(categories)}.` : "",
       req.dietary?.length
         ? `Every recipe MUST be ${req.dietary.map(dietLabel).join(", ")}. Check every ingredient, including sauces, stocks and garnishes.`
         : "",
-      req.goals?.length ? `Every recipe should be ${req.goals.map(goalPrompt).join(", and ")}. Keep the nutrition estimates honest.` : "",
+      goals.length
+        ? goals.length === 1
+          ? `Every recipe should be ${goalPrompt(goals[0]!)}. Keep the nutrition estimates honest.`
+          : `Every recipe should meet at least one of: ${goals.map(goalPrompt).join("; ")}. Keep the nutrition estimates honest.`
+        : "",
       req.onHand?.length
         ? `Build around ingredients they already have on hand: ${req.onHand.slice(0, 80).join(", ")}. ` +
           `Each recipe should need at most ${req.leniency} ingredients they don't have (not counting salt, pepper, oil, water).`
@@ -155,7 +172,7 @@ export class AiRecipes {
         nutrition: cleanNutrition(r.nutrition),
         // Breakfast, dessert and snacks aren't lunch/dinner plan dishes; keep their own category.
         suits: mainMeal ? (r.suits ?? []).filter((s): s is MealType => s === "lunch" || s === "dinner") : [],
-        category: mainMeal ? r.category : mealLabel(req.meal!),
+        category: mainMeal || meals.length > 1 ? r.category : mealLabel(meals[0]!),
       };
     });
   }

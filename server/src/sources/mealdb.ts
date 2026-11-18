@@ -93,36 +93,41 @@ export class MealDb {
   }
 
   /**
-   * Find candidate meals. Filters by cuisine/category when given; otherwise tries to read the
-   * mood text as a cuisine, category, main ingredient or dish name; otherwise random meals.
+   * Find candidate meals. Filters by cuisines/categories when given (any of the cuisines AND any of
+   * the categories); otherwise tries to read the mood text as a cuisine, category, main ingredient or
+   * dish name; otherwise random meals.
    */
   async candidates(opts: {
-    cuisine?: string;
-    category?: string;
-    /** Extra categories (any of them) used when no explicit category is chosen, e.g. for a meal or diet filter. */
+    cuisines?: string[];
     categories?: string[];
+    /** Categories (any of them) used when none are chosen explicitly, e.g. for a meal or diet filter. */
+    fallbackCategories?: string[];
     mood?: string;
     want: number;
   }): Promise<{
     refs: MealRef[];
     note: string;
   }> {
-    const { cuisine, mood, want } = opts;
-    const cats = opts.category ? [opts.category] : (opts.categories ?? []);
-    const category = cats.join(" / ") || undefined;
+    const { mood, want } = opts;
+    const cuisines = opts.cuisines ?? [];
+    const cats = opts.categories?.length ? opts.categories : (opts.fallbackCategories ?? []);
 
-    if (cuisine || cats.length) {
-      const [a, ...byCat] = await Promise.all([
-        cuisine ? this.filter("a", cuisine) : null,
-        ...cats.map((c) => this.filter("c", c)),
-      ]);
-      const c = byCat.length ? byCat.flatMap((l) => l ?? []) : null;
+    if (cuisines.length || cats.length) {
+      const union = async (param: "a" | "c", values: string[]) => {
+        if (!values.length) return null;
+        const lists = await Promise.all(values.map((v) => this.filter(param, v)));
+        const byId = new Map<string, MealRef>();
+        for (const r of lists.flat()) byId.set(r.id, r);
+        return [...byId.values()];
+      };
+      const [a, c] = await Promise.all([union("a", cuisines), union("c", cats)]);
       let refs = a ?? c ?? [];
       if (a && c) {
         const ids = new Set(c.map((r) => r.id));
         refs = a.filter((r) => ids.has(r.id));
       }
-      return { refs: shuffle(refs), note: [cuisine, category].filter(Boolean).join(" · ") };
+      const note = [cuisines.join(" or "), cats.join(" or ")].filter(Boolean).join(" · ");
+      return { refs: shuffle(refs), note };
     }
 
     if (mood?.trim()) {
@@ -130,7 +135,14 @@ export class MealDb {
       const [areas, allCats] = await Promise.all([this.areas(), this.categories()]);
       const area = areas.find((a) => text.includes(normalize(a)));
       const cat = allCats.find((c) => text.includes(normalize(c)));
-      if (area || cat) return this.candidates({ cuisine: area, category: cat, categories: opts.categories, want });
+      if (area || cat) {
+        return this.candidates({
+          cuisines: area ? [area] : [],
+          categories: cat ? [cat] : [],
+          fallbackCategories: opts.fallbackCategories,
+          want,
+        });
+      }
 
       const byName = await this.search(mood.trim());
       if (byName.length) return { refs: shuffle(byName), note: `Matches for "${mood.trim()}"` };

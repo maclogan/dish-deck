@@ -1,5 +1,25 @@
 import { describe, expect, it } from "vitest";
-import { dietViolation, fitsDiet, fitsGoals, fitsMeal, parseNutrient } from "../src/filters.js";
+import { dietViolation, fitsDiet, fitsGoals, fitsMeal, mealDbCategoriesForMeals, parseNutrient } from "../src/filters.js";
+import { toDeckQuery } from "../src/service.js";
+
+describe("deck request lists", () => {
+  it("merges the old single-value fields into the lists", () => {
+    const q = toDeckQuery({
+      source: "new",
+      onHand: false,
+      leniency: 2,
+      count: 8,
+      exclude: [],
+      cuisine: "Thai",
+      cuisines: ["Thai", "Indian"],
+      meal: "dinner",
+      categories: ["Seafood"],
+    });
+    expect(q.cuisines).toEqual(["Thai", "Indian"]);
+    expect(q.meals).toEqual(["dinner"]);
+    expect(q.categories).toEqual(["Seafood"]);
+  });
+});
 
 describe("dietary filters", () => {
   it("catches meat, fish and stock for vegetarians", () => {
@@ -44,12 +64,27 @@ describe("dietary filters", () => {
 
 describe("meal filter", () => {
   it("uses category and tags", () => {
-    expect(fitsMeal({ category: "Dessert", tags: [] }, "dessert")).toBe(true);
-    expect(fitsMeal({ category: "Dessert", tags: [] }, "dinner")).toBe(false);
-    expect(fitsMeal({ category: "Chicken", tags: [] }, "dinner")).toBe(true);
-    expect(fitsMeal({ category: "Chicken", tags: [] }, "breakfast")).toBe(false);
-    expect(fitsMeal({ category: undefined, tags: ["Brunch"] }, "breakfast")).toBe(true);
-    expect(fitsMeal({ category: "Starter", tags: [] }, "snack")).toBe(true);
+    expect(fitsMeal({ category: "Dessert", tags: [] }, ["dessert"])).toBe(true);
+    expect(fitsMeal({ category: "Dessert", tags: [] }, ["dinner"])).toBe(false);
+    expect(fitsMeal({ category: "Chicken", tags: [] }, ["dinner"])).toBe(true);
+    expect(fitsMeal({ category: "Chicken", tags: [] }, ["breakfast"])).toBe(false);
+    expect(fitsMeal({ category: undefined, tags: ["Brunch"] }, ["breakfast"])).toBe(true);
+    expect(fitsMeal({ category: "Starter", tags: [] }, ["snack"])).toBe(true);
+    expect(fitsMeal({ category: "Dessert", tags: [] }, [])).toBe(true);
+  });
+
+  it("treats several meals as any of them", () => {
+    expect(fitsMeal({ category: "Dessert", tags: [] }, ["dinner", "dessert"])).toBe(true);
+    expect(fitsMeal({ category: "Chicken", tags: [] }, ["breakfast", "dinner"])).toBe(true);
+    expect(fitsMeal({ category: "Chicken", tags: [] }, ["breakfast", "dessert"])).toBe(false);
+  });
+
+  it("maps meals to TheMealDB categories", () => {
+    expect(mealDbCategoriesForMeals(["breakfast", "dessert"])).toEqual(["Breakfast", "Dessert"]);
+    expect(mealDbCategoriesForMeals(["snack"])).toEqual(["Starter", "Side"]);
+    // Lunch/dinner can be any main course, so they leave categories open.
+    expect(mealDbCategoriesForMeals(["dessert", "dinner"])).toEqual([]);
+    expect(mealDbCategoriesForMeals([])).toEqual([]);
   });
 });
 
@@ -59,6 +94,12 @@ describe("nutrition goals", () => {
     expect(fitsGoals(card, ["low-calorie", "high-protein", "low-carb", "low-fat"])).toBe(true);
     expect(fitsGoals(card, ["high-fiber"])).toBe(false);
     expect(fitsGoals(card, ["keto"])).toBe(false);
+  });
+
+  it("treats several goals as any of them", () => {
+    const card = { tags: [], nutrition: { calories: 420, protein: 35, carbs: 18, fat: 14, fiber: 4 } };
+    expect(fitsGoals(card, ["high-fiber", "high-protein"])).toBe(true);
+    expect(fitsGoals(card, ["high-fiber", "keto"])).toBe(false);
   });
 
   it("falls back to tags, and fails when nothing is known", () => {

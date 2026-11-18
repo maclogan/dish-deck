@@ -166,38 +166,49 @@ const MEAL_WORDS: Record<MealFilter, string[]> = {
 };
 const NOT_A_MAIN: MealFilter[] = ["breakfast", "dessert", "snack"];
 
-/** TheMealDB categories for a meal (empty means "any main-course category"). */
-export function mealDbCategoriesForMeal(meal: MealFilter): string[] {
-  if (meal === "breakfast") return ["Breakfast"];
-  if (meal === "dessert") return ["Dessert"];
-  if (meal === "snack") return ["Starter", "Side"];
-  return [];
-}
+export const isMainMeal = (meal: MealFilter) => !NOT_A_MAIN.includes(meal);
 
 /**
- * Does a dish fit the chosen meal? Uses its category and tags. Lunch/dinner accept any dish not
- * marked as breakfast, dessert or a snack, since most recipes aren't tagged with a meal at all.
+ * TheMealDB categories that cover the chosen meals. Empty means no category restriction: lunch and
+ * dinner can be any main-course category, so picking either of them leaves the categories open.
  */
-export function fitsMeal(card: Pick<Card, "category" | "tags" | "suits">, meal: MealFilter | undefined): boolean {
-  if (!meal) return true;
-  const labels = [card.category ?? "", ...card.tags].map(normalize).filter(Boolean);
+export function mealDbCategoriesForMeals(meals: MealFilter[]): string[] {
+  if (!meals.length || meals.some(isMainMeal)) return [];
+  const cats: string[] = [];
+  if (meals.includes("breakfast")) cats.push("Breakfast");
+  if (meals.includes("dessert")) cats.push("Dessert");
+  if (meals.includes("snack")) cats.push("Starter", "Side");
+  return cats;
+}
+
+/** Does a dish fit one meal? Uses its category and tags. */
+function fitsOneMeal(labels: string[], suits: Card["suits"], meal: MealFilter): boolean {
   const has = (m: MealFilter) => labels.some((l) => MEAL_WORDS[m].includes(l));
-  if (NOT_A_MAIN.includes(meal)) return has(meal);
+  if (!isMainMeal(meal)) return has(meal);
+  // Lunch/dinner accept any dish not marked as breakfast, dessert or a snack,
+  // since most recipes aren't tagged with a meal at all.
   if (NOT_A_MAIN.some(has)) return false;
-  if (card.suits && card.suits.length === 0) return false;
+  if (suits && suits.length === 0) return false;
   return true;
+}
+
+/** Does a dish fit any of the chosen meals? No meals chosen means anything goes. */
+export function fitsMeal(card: Pick<Card, "category" | "tags" | "suits">, meals: MealFilter[]): boolean {
+  if (!meals.length) return true;
+  const labels = [card.category ?? "", ...card.tags].map(normalize).filter(Boolean);
+  return meals.some((m) => fitsOneMeal(labels, card.suits, m));
 }
 
 // ------------------------------------------------------------------ goals
 
 /**
- * Does a dish meet every goal? Checks per-serving nutrition, then falls back to tags (a saved recipe
- * tagged "High Protein" counts). Missing numbers with no matching tag fail, since we can't tell.
+ * Does a dish meet any of the goals? Checks per-serving nutrition, then falls back to tags (a saved
+ * recipe tagged "High Protein" counts). Missing numbers with no matching tag fail, since we can't tell.
  */
 export function fitsGoals(card: Pick<Card, "nutrition" | "tags">, goals: GoalId[]): boolean {
   if (!goals.length) return true;
   const tags = new Set(card.tags.map(normalize));
-  return goals.every((id) => {
+  return goals.some((id) => {
     const def = GOAL_DEFS.find((g) => g.id === id)!;
     const byNumbers = card.nutrition ? def.check(card.nutrition) : undefined;
     if (byNumbers !== undefined) return byNumbers;

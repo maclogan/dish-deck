@@ -20,7 +20,7 @@ import {
   fitsGoals,
   fitsMeal,
   goalLabel,
-  mealDbCategoriesForMeal,
+  mealDbCategoriesForMeals,
   mealDbCategoryForDiet,
   mealLabel,
   parseNutrient,
@@ -36,6 +36,7 @@ import type {
   DeckRequest,
   DeckResponse,
   GenerateRequest,
+  MealFilter,
   MealType,
   Nutrition,
   PlanDay,
@@ -141,7 +142,7 @@ export class Service {
         ...card,
         fits: {
           diets: DIET_IDS.filter((d) => fitsDiet(ingredients, [d])),
-          meals: MEAL_IDS.filter((m) => fitsMeal(card, m)),
+          meals: MEAL_IDS.filter((m) => fitsMeal(card, [m])),
           goals: GOAL_IDS.filter((g) => fitsGoals(card, [g])),
         },
         rating: r.rating ?? undefined,
@@ -153,11 +154,12 @@ export class Service {
 
   // ------------------------------------------------------------------ deck
 
-  async deck(req: DeckRequest): Promise<DeckResponse> {
+  async deck(input: DeckRequest): Promise<DeckResponse> {
+    const req = toDeckQuery(input);
     return req.source === "saved" ? this.savedDeck(req) : this.newDeck(req);
   }
 
-  private async savedDeck(req: DeckRequest): Promise<DeckResponse> {
+  private async savedDeck(req: DeckQuery): Promise<DeckResponse> {
     const seen = new Set(req.exclude);
     const dietary = req.dietary ?? [];
     const goals = req.goals ?? [];
@@ -180,15 +182,16 @@ export class Service {
     }
     note += filterSuffix(req);
 
+    // Each group is any-of: a mood word, any chosen cuisine, any chosen type. Groups combine with AND.
+    const groups = [moodWords, req.cuisines.map(normalize), req.categories.map(normalize)].filter((g) => g.length);
     const matches = (r: MealieRecipeSummary) => {
-      if (!moodWords.length && !req.cuisine && !req.category) return true;
+      if (!groups.length) return true;
       const hay = normalize([r.name, r.description, ...(r.tags ?? []).map((t) => t.name), ...(r.recipeCategory ?? []).map((c) => c.name)].join(" "));
-      const wanted = [...moodWords, ...[req.cuisine, req.category].filter(Boolean).map((s) => normalize(s!))];
-      return wanted.some((w) => hay.includes(w));
+      return groups.every((g) => g.some((w) => hay.includes(w)));
     };
 
     const pool = summaries.filter((s) => !seen.has(`mealie:${s.recipe.id}`) && matches(s.recipe));
-    const strict = dietary.length > 0 || goals.length > 0 || !!req.meal;
+    const strict = dietary.length > 0 || goals.length > 0 || req.meals.length > 0;
     // Dietary, meal and nutrition checks need the full recipe, so fetch in small batches until the deck is full.
     const limit = Math.min(pool.length, strict ? 40 : req.count);
     const cards: Card[] = [];
@@ -198,7 +201,7 @@ export class Service {
         const ingredients = (full.recipeIngredient ?? []).map(ingredientText).filter(Boolean);
         return this.cardFromMealie(full, ingredients, missing);
       });
-      cards.push(...batch.filter((c) => fitsDiet(c.ingredients, dietary) && fitsMeal(c, req.meal) && fitsGoals(c, goals)));
+      cards.push(...batch.filter((c) => fitsDiet(c.ingredients, dietary) && fitsMeal(c, req.meals) && fitsGoals(c, goals)));
     }
     const out = cards.slice(0, req.count);
     return { cards: out, note: out.length ? note : `${note}: nothing matched` };
@@ -223,7 +226,7 @@ export class Service {
     };
   }
 
-  private async newDeck(req: DeckRequest): Promise<DeckResponse> {
+  private async newDeck(req: DeckQuery): Promise<DeckResponse> {
     const seen = new Set(req.exclude);
     const book = await this.recipeSummaries().catch(() => [] as MealieRecipeSummary[]);
     const bookNames = new Set(book.map((r) => normalize(r.name)));
@@ -242,10 +245,10 @@ export class Service {
       try {
         const generated = await this.deps.ai!.generate({
           mood,
-          cuisine: req.cuisine,
-          category: req.category,
+          cuisines: req.cuisines,
+          categories: req.categories,
           dietary,
-          meal: req.meal,
+          meals: req.meals,
           goals,
           count: Math.max(req.count, 6),
           onHand: onHand?.matcher.names,
@@ -267,14 +270,14 @@ export class Service {
     }
 
     if (!cards) {
-      const strict = dietary.length > 0 || !!req.meal;
+      const strict = dietary.length > 0 || req.meals.length > 0;
       const want = Math.min(req.count * (req.onHand ? 3 : 2) * (strict ? 2 : 1), 48);
-      const mealCats = req.meal ? mealDbCategoriesForMeal(req.meal) : [];
+      const mealCats = mealDbCategoriesForMeals(req.meals);
       const dietCat = mealDbCategoryForDiet(dietary);
       const found = await this.deps.mealdb.candidates({
-        cuisine: req.cuisine,
-        category: req.category,
-        categories: mealCats.length ? mealCats : dietCat ? [dietCat] : undefined,
+        cuisines: req.cuisines,
+        categories: req.categories,
+        fallbackCategories: mealCats.length ? mealCats : dietCat ? [dietCat] : [],
         mood: req.mood,
         want,
       });
@@ -286,7 +289,7 @@ export class Service {
       cards = meals
         .filter((m) => !!m)
         .map((m) => mealDbToCard(m!))
-        .filter((c) => fitsDiet(c.ingredients, dietary) && fitsMeal(c, req.meal));
+        .filter((c) => fitsDiet(c.ingredients, dietary) && fitsMeal(c, req.meals));
     }
 
     cards = cards.filter((c) => !seen.has(c.key) && !bookNames.has(normalize(c.title)));
@@ -438,13 +441,26 @@ export function imageSig(secret: string, id: string): string {
 }
 
 /** " · Dinner · Vegan · High protein" for the deck note, or "" when no extra filters are on. */
-export function filterSuffix(req: Pick<DeckRequest, "meal" | "dietary" | "goals">): string {
+export function filterSuffix(req: Pick<DeckQuery, "meals" | "dietary" | "goals">): string {
   const parts = [
-    ...(req.meal ? [mealLabel(req.meal)] : []),
+    ...(req.meals.length ? [req.meals.map(mealLabel).join(" or ")] : []),
     ...(req.dietary ?? []).map(dietLabel),
-    ...(req.goals ?? []).map(goalLabel),
+    ...((req.goals ?? []).length ? [(req.goals ?? []).map(goalLabel).join(" or ")] : []),
   ];
   return parts.length ? ` · ${parts.join(" · ")}` : "";
+}
+
+/** A deck request with the list filters filled in (old single-value fields merged in). */
+export type DeckQuery = DeckRequest & { cuisines: string[]; categories: string[]; meals: MealFilter[] };
+
+export function toDeckQuery(req: DeckRequest): DeckQuery {
+  const list = <T>(many: T[] | undefined, one: T | undefined) => [...new Set([...(many ?? []), ...(one ? [one] : [])])];
+  return {
+    ...req,
+    cuisines: list(req.cuisines, req.cuisine),
+    categories: list(req.categories, req.category),
+    meals: list(req.meals, req.meal),
+  };
 }
 
 /** Mealie stores nutrition as free text ("350 kcal", "25 g"); pull out the numbers we filter on. */

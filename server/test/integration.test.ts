@@ -153,8 +153,23 @@ describe("deck", () => {
     });
     const res = await service.deck({ source: "new", mood: "teriyaki", onHand: false, leniency: 2, count: 4, exclude: [] });
     expect(res.cards.map((c) => c.source)).toEqual(["mealdb"]);
-    expect(res.note).toMatch(/AI ideas aren't available/);
+    expect(res.note).toMatch(/Couldn't get AI ideas this time; showing TheMealDB results/);
     expect(warnings[0]).toMatch(/529 overloaded/);
+  });
+
+  it("takes several cuisines as any of them", async () => {
+    const { service } = setup();
+    // The fake returns the same casserole for every cuisine, so the union should hold it once.
+    const res = await service.deck({ source: "new", onHand: false, leniency: 2, count: 4, exclude: [], cuisines: ["Japanese", "Italian"] });
+    expect(res.cards.map((c) => c.key)).toEqual(["mealdb:52772"]);
+    expect(res.note).toContain("Japanese or Italian");
+  });
+
+  it("drops TheMealDB dishes that don't fit any chosen meal", async () => {
+    const { service } = setup();
+    const res = await service.deck({ source: "new", onHand: false, leniency: 2, count: 4, exclude: [], meals: ["breakfast", "dessert"] });
+    expect(res.cards).toHaveLength(0); // the casserole is a main course
+    expect(res.note).toContain("Breakfast or Dessert");
   });
 
   it("drops TheMealDB dishes that break a dietary restriction", async () => {

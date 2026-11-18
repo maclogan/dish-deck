@@ -14,7 +14,7 @@ import {
 } from "../api";
 import { IconClock, IconRefresh, IconSearch, IconSliders } from "../icons";
 import { OnHandBadge, RecipeImage } from "./CardFace";
-import { ChipRow, toggleIn } from "./ChipRow";
+import { MultiPills } from "./ChipRow";
 import type { Action } from "./Deck";
 import { DetailSheet } from "./DetailSheet";
 import { PlanSheet, dayLabel } from "./PlanSheet";
@@ -71,10 +71,11 @@ export function Recipes(props: {
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<Sort>(loadSort);
   const [showFilters, setShowFilters] = useState(false);
-  const [meal, setMeal] = useState<MealFilter | undefined>();
+  // Within each filter, picking several means "any of these"; dietary needs are the exception (all must hold).
+  const [meals, setMeals] = useState<MealFilter[]>([]);
   const [dietary, setDietary] = useState<DietId[]>([]);
   const [goals, setGoals] = useState<GoalId[]>([]);
-  const [tag, setTag] = useState<string | undefined>();
+  const [pickedTags, setPickedTags] = useState<string[]>([]);
   const [readyOnly, setReadyOnly] = useState(false);
 
   const [detail, setDetail] = useState<Card | null>(null);
@@ -116,10 +117,10 @@ export function Recipes(props: {
     const words = norm(query).split(/\s+/).filter(Boolean);
     return (recipes ?? [])
       .filter((r) => {
-        if (meal && !r.fits.meals.includes(meal)) return false;
+        if (meals.length && !meals.some((m) => r.fits.meals.includes(m))) return false;
         if (!dietary.every((d) => r.fits.diets.includes(d))) return false;
-        if (!goals.every((g) => r.fits.goals.includes(g))) return false;
-        if (tag && r.category !== tag && !r.tags.includes(tag)) return false;
+        if (goals.length && !goals.some((g) => r.fits.goals.includes(g))) return false;
+        if (pickedTags.length && !pickedTags.some((t) => r.category === t || r.tags.includes(t))) return false;
         if (readyOnly && missingCount(r) !== 0) return false;
         if (words.length) {
           const hay = norm([r.title, r.description ?? "", r.category ?? "", ...r.tags, ...r.ingredients].join(" "));
@@ -128,14 +129,14 @@ export function Recipes(props: {
         return true;
       })
       .sort(compare(sort));
-  }, [recipes, query, sort, meal, dietary, goals, tag, readyOnly]);
+  }, [recipes, query, sort, meals, dietary, goals, pickedTags, readyOnly]);
 
-  const filterCount = (meal ? 1 : 0) + dietary.length + goals.length + (tag ? 1 : 0) + (readyOnly ? 1 : 0);
+  const filterCount = meals.length + dietary.length + goals.length + pickedTags.length + (readyOnly ? 1 : 0);
   const clearFilters = () => {
-    setMeal(undefined);
+    setMeals([]);
     setDietary([]);
     setGoals([]);
-    setTag(undefined);
+    setPickedTags([]);
     setReadyOnly(false);
     setQuery("");
   };
@@ -196,54 +197,24 @@ export function Recipes(props: {
               <span>Have everything on hand</span>
             </label>
           )}
-          <div class="filter-label">Meal</div>
-          <ChipRow>
-            <button class={`pill ${!meal ? "on" : ""}`} onClick={() => setMeal(undefined)}>Any</button>
-            {config.meals.map((m) => (
-              <button key={m.id} class={`pill ${meal === m.id ? "on" : ""}`} onClick={() => setMeal(meal === m.id ? undefined : m.id)}>
-                {m.label}
-              </button>
-            ))}
-          </ChipRow>
-          <div class="filter-label">Dietary &amp; allergies</div>
-          <ChipRow>
-            {config.dietary.map((d) => (
-              <button
-                key={d.id}
-                class={`pill ${dietary.includes(d.id) ? "on" : ""}`}
-                aria-pressed={dietary.includes(d.id)}
-                onClick={() => setDietary((l) => toggleIn(l, d.id))}
-              >
-                {d.label}
-              </button>
-            ))}
-          </ChipRow>
           <div class="filter-label">
-            Nutrition <span class="filter-hint">from Mealie nutrition or tags</span>
+            Meal <span class="filter-hint">pick any</span>
           </div>
-          <ChipRow>
-            {config.goals.map((g) => (
-              <button
-                key={g.id}
-                class={`pill ${goals.includes(g.id) ? "on" : ""}`}
-                aria-pressed={goals.includes(g.id)}
-                onClick={() => setGoals((l) => toggleIn(l, g.id))}
-              >
-                {g.label}
-              </button>
-            ))}
-          </ChipRow>
+          <MultiPills options={config.meals} selected={meals} onChange={setMeals} />
+          <div class="filter-label">
+            Dietary &amp; allergies <span class="filter-hint">must meet all</span>
+          </div>
+          <MultiPills options={config.dietary} selected={dietary} onChange={setDietary} anyLabel="None" />
+          <div class="filter-label">
+            Nutrition <span class="filter-hint">pick any · from Mealie nutrition or tags</span>
+          </div>
+          <MultiPills options={config.goals} selected={goals} onChange={setGoals} />
           {tags.length > 0 && (
             <>
-              <div class="filter-label">Category &amp; tags</div>
-              <ChipRow>
-                <button class={`pill ${!tag ? "on" : ""}`} onClick={() => setTag(undefined)}>Any</button>
-                {tags.map((t) => (
-                  <button key={t} class={`pill ${tag === t ? "on" : ""}`} onClick={() => setTag(tag === t ? undefined : t)}>
-                    {t}
-                  </button>
-                ))}
-              </ChipRow>
+              <div class="filter-label">
+                Category &amp; tags <span class="filter-hint">pick any</span>
+              </div>
+              <MultiPills options={tags} selected={pickedTags} onChange={setPickedTags} />
             </>
           )}
         </div>

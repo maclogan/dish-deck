@@ -74,3 +74,45 @@ export function ChipRow(props: { children: ComponentChildren }) {
 
 /** Add the item if it's missing, remove it if it's there (for multi-select pills). */
 export const toggleIn = <T,>(list: T[], item: T) => (list.includes(item) ? list.filter((x) => x !== item) : [...list, item]);
+
+/**
+ * A scrolling row of multi-select pills. Picking several means "any of these". "Any" (when shown)
+ * is on while nothing is picked, and clears the selection.
+ */
+export function MultiPills<T extends string>(props: {
+  options: readonly (T | { id: T; label: string })[];
+  selected: T[];
+  onChange: (next: T[]) => void;
+  /** Label for the clear-all pill, or false to leave it out. */
+  anyLabel?: string | false;
+  disabled?: boolean;
+}) {
+  const { selected, onChange, disabled } = props;
+  const anyLabel = props.anyLabel ?? "Any";
+  return (
+    <ChipRow>
+      {anyLabel !== false && (
+        <button type="button" class={`pill ${selected.length === 0 ? "on" : ""}`} disabled={disabled} onClick={() => onChange([])}>
+          {anyLabel}
+        </button>
+      )}
+      {props.options.map((o) => {
+        const id = typeof o === "string" ? o : o.id;
+        const label = typeof o === "string" ? o : o.label;
+        const on = selected.includes(id);
+        return (
+          <button
+            key={id}
+            type="button"
+            class={`pill ${on ? "on" : ""}`}
+            aria-pressed={on}
+            disabled={disabled}
+            onClick={() => onChange(toggleIn(selected, id))}
+          >
+            {label}
+          </button>
+        );
+      })}
+    </ChipRow>
+  );
+}
