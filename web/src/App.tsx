@@ -1,9 +1,8 @@
 import { useEffect, useState } from "preact/hooks";
 import { ApiError, api, hasPasscode, setPasscode, storageGet, storageSet, type AppConfigResponse, type PlanDay } from "./api";
 import { Discover } from "./components/Discover";
-import { Recipes } from "./components/Recipes";
 import { Week } from "./components/Week";
-import { IconBook, IconCalendar, IconExternal, IconLock, IconSparkle } from "./icons";
+import { IconCalendar, IconExternal, IconLock, IconSparkle } from "./icons";
 import { todayIso } from "./text";
 
 interface Toast {
@@ -18,7 +17,9 @@ export function App() {
   const [configError, setConfigError] = useState<string | null>(null);
   const [needPasscode, setNeedPasscode] = useState(false);
   const [passInput, setPassInput] = useState("");
-  const [tab, setTab] = useState<"discover" | "recipes" | "week">("discover");
+  const [tab, setTab] = useState<"discover" | "week">("discover");
+  /** Discover is showing the "Our recipes" grid, which gets a wider page. */
+  const [bookOpen, setBookOpen] = useState(false);
   const [days, setDays] = useState<PlanDay[] | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
   const today = todayIso();
@@ -93,7 +94,7 @@ export function App() {
 
   return (
     <div class="app">
-      <header class="topbar">
+      <header class={`topbar ${tab === "discover" && bookOpen ? "wide" : ""}`}>
         <h1>Dish Deck</h1>
         <div class="topbar-actions">
           {config.aiEnabled && (
@@ -115,11 +116,17 @@ export function App() {
         </div>
       </header>
 
-      <main class={tab === "recipes" ? "wide" : ""}>
+      <main class={tab === "discover" && bookOpen ? "wide" : ""}>
         {tab === "discover" ? (
-          <Discover config={config} aiOn={config.aiEnabled && aiOn} days={days} today={today} refreshWeek={refreshWeek} notify={notify} />
-        ) : tab === "recipes" ? (
-          <Recipes config={config} days={days} today={today} refreshWeek={refreshWeek} notify={notify} />
+          <Discover
+            config={config}
+            aiOn={config.aiEnabled && aiOn}
+            days={days}
+            today={today}
+            refreshWeek={refreshWeek}
+            notify={notify}
+            onWide={setBookOpen}
+          />
         ) : (
           <Week days={days} today={today} refreshWeek={refreshWeek} notify={notify} />
         )}
@@ -129,10 +136,6 @@ export function App() {
         <button class={tab === "discover" ? "on" : ""} onClick={() => setTab("discover")}>
           <IconSparkle size={22} />
           <span>Discover</span>
-        </button>
-        <button class={tab === "recipes" ? "on" : ""} onClick={() => setTab("recipes")}>
-          <IconBook size={22} />
-          <span>Recipes</span>
         </button>
         <button class={tab === "week" ? "on" : ""} onClick={() => { setTab("week"); refreshWeek(); }}>
           <IconCalendar size={22} />

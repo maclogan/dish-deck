@@ -16,6 +16,7 @@ import { IconRefresh, IconSearch, IconSliders, IconSparkle } from "../icons";
 import { Deck, type Action } from "./Deck";
 import { DetailSheet } from "./DetailSheet";
 import { PlanSheet, dayLabel } from "./PlanSheet";
+import { Recipes } from "./Recipes";
 
 type Source = "new" | "saved";
 
@@ -52,6 +53,8 @@ export function Discover(props: {
   today: string;
   refreshWeek: () => void;
   notify: (message: string, link?: string, error?: boolean) => void;
+  /** Told when the recipe book grid is showing, so the page can use a wider layout. */
+  onWide?: (wide: boolean) => void;
 }) {
   const { config } = props;
   const initial = loadPrefs();
@@ -121,8 +124,14 @@ export function Discover(props: {
     }
   };
 
-  // First deal, and re-deal when the deck source or filters change.
+  // "Our recipes" is the recipe book grid; let the page widen to fit more cards.
   useEffect(() => {
+    props.onWide?.(source === "saved");
+  }, [source]);
+
+  // First deal, and re-deal when the filters change. "Our recipes" shows the grid instead of a deck.
+  useEffect(() => {
+    if (source === "saved") return;
     deal(false);
   }, [source, cuisine, category, meal, dietary.join(), goals.join(), onHand, leniency]);
 
@@ -138,7 +147,7 @@ export function Discover(props: {
 
   // Keep the deck topped up.
   useEffect(() => {
-    if (cards.length <= 2 && cards.length > 0 && !loading && !exhausted) deal(true);
+    if (source === "new" && cards.length <= 2 && cards.length > 0 && !loading && !exhausted) deal(true);
   }, [cards.length, loading, exhausted]);
 
   const removeCard = (card: Card) => {
@@ -213,158 +222,162 @@ export function Discover(props: {
         </button>
       </div>
 
-      <form class="mood" onSubmit={submitMood}>
-        <IconSearch size={18} />
-        <input
-          type="text"
-          inputMode="search"
-          enterKeyHint="go"
-          placeholder={
-            source === "new"
-              ? props.aiOn
-                ? "What sounds good? e.g. cozy soup, spicy"
-                : "What sounds good? e.g. salmon, curry"
-              : "Search our recipes"
-          }
-          value={mood}
-          onInput={(e) => setMood((e.target as HTMLInputElement).value)}
-          aria-label="What sounds good?"
-        />
-        <button type="submit" class={`go ${willUseAi ? "ai" : ""}`} aria-label="Find ideas">
-          {willUseAi ? <IconSparkle size={18} /> : <IconRefresh size={18} />}
-        </button>
-        <button
-          type="button"
-          class={`filters-btn ${showFilters ? "on" : ""}`}
-          aria-expanded={showFilters}
-          aria-label="Filters"
-          onClick={() => setShowFilters((v) => !v)}
-        >
-          <IconSliders size={18} />
-          {filterCount > 0 && <span class="count">{filterCount}</span>}
-        </button>
-      </form>
+      {source === "saved" ? (
+        <Recipes config={config} days={props.days} today={props.today} refreshWeek={props.refreshWeek} notify={props.notify} />
+      ) : (
+        <>
+          <form class="mood" onSubmit={submitMood}>
+            <IconSearch size={18} />
+            <input
+              type="text"
+              inputMode="search"
+              enterKeyHint="go"
+              placeholder={
+                source === "new"
+                  ? props.aiOn
+                    ? "What sounds good? e.g. cozy soup, spicy"
+                    : "What sounds good? e.g. salmon, curry"
+                  : "Search our recipes"
+              }
+              value={mood}
+              onInput={(e) => setMood((e.target as HTMLInputElement).value)}
+              aria-label="What sounds good?"
+            />
+            <button type="submit" class={`go ${willUseAi ? "ai" : ""}`} aria-label="Find ideas">
+              {willUseAi ? <IconSparkle size={18} /> : <IconRefresh size={18} />}
+            </button>
+            <button
+              type="button"
+              class={`filters-btn ${showFilters ? "on" : ""}`}
+              aria-expanded={showFilters}
+              aria-label="Filters"
+              onClick={() => setShowFilters((v) => !v)}
+            >
+              <IconSliders size={18} />
+              {filterCount > 0 && <span class="count">{filterCount}</span>}
+            </button>
+          </form>
 
-      {showFilters && (
-        <div class="filters">
-          <label class="toggle">
-            <input type="checkbox" checked={onHand} onChange={(e) => setOnHand((e.target as HTMLInputElement).checked)} />
-            <span class="switch" />
-            <span>Use what's on hand</span>
-          </label>
-          {onHand && (
-            <div class="stepper" aria-label="Missing ingredients allowed">
-              <span>Up to</span>
-              <button type="button" onClick={() => setLeniency((n) => Math.max(0, n - 1))} aria-label="Fewer">−</button>
-              <strong>{leniency}</strong>
-              <button type="button" onClick={() => setLeniency((n) => Math.min(10, n + 1))} aria-label="More">+</button>
-              <span>missing</span>
+          {showFilters && (
+            <div class="filters">
+              <label class="toggle">
+                <input type="checkbox" checked={onHand} onChange={(e) => setOnHand((e.target as HTMLInputElement).checked)} />
+                <span class="switch" />
+                <span>Use what's on hand</span>
+              </label>
+              {onHand && (
+                <div class="stepper" aria-label="Missing ingredients allowed">
+                  <span>Up to</span>
+                  <button type="button" onClick={() => setLeniency((n) => Math.max(0, n - 1))} aria-label="Fewer">−</button>
+                  <strong>{leniency}</strong>
+                  <button type="button" onClick={() => setLeniency((n) => Math.min(10, n + 1))} aria-label="More">+</button>
+                  <span>missing</span>
+                </div>
+              )}
+              <div class="filter-label">Meal</div>
+              <ChipRow>
+                <button class={`pill ${!meal ? "on" : ""}`} onClick={() => setMeal(undefined)}>Any</button>
+                {config.meals.map((m) => (
+                  <button key={m.id} class={`pill ${meal === m.id ? "on" : ""}`} onClick={() => setMeal(meal === m.id ? undefined : m.id)}>
+                    {m.label}
+                  </button>
+                ))}
+              </ChipRow>
+              <div class="filter-label">
+                Dietary &amp; allergies
+                {dietary.length > 0 && (
+                  <button type="button" class="filter-clear" onClick={() => setDietary([])}>Clear</button>
+                )}
+              </div>
+              <ChipRow>
+                {config.dietary.map((d) => (
+                  <button
+                    key={d.id}
+                    class={`pill ${dietary.includes(d.id) ? "on" : ""}`}
+                    aria-pressed={dietary.includes(d.id)}
+                    onClick={() => setDietary((list) => toggleIn(list, d.id))}
+                  >
+                    {d.label}
+                  </button>
+                ))}
+              </ChipRow>
+              <div class="filter-label">
+                Nutrition
+                {!goalsAvailable && <span class="filter-hint">Needs AI ideas</span>}
+                {goalsAvailable && goals.length > 0 && (
+                  <button type="button" class="filter-clear" onClick={() => setGoals([])}>Clear</button>
+                )}
+              </div>
+              <ChipRow>
+                {config.goals.map((g) => (
+                  <button
+                    key={g.id}
+                    class={`pill ${activeGoals.includes(g.id) ? "on" : ""}`}
+                    aria-pressed={activeGoals.includes(g.id)}
+                    disabled={!goalsAvailable}
+                    onClick={() => setGoals((list) => toggleIn(list, g.id))}
+                  >
+                    {g.label}
+                  </button>
+                ))}
+              </ChipRow>
+              {config.cuisines.length > 0 && (
+                <>
+                  <div class="filter-label">Cuisine</div>
+                  <ChipRow>
+                    <button class={`pill ${!cuisine ? "on" : ""}`} onClick={() => setCuisine(undefined)}>Any</button>
+                    {config.cuisines.map((c) => (
+                      <button key={c} class={`pill ${cuisine === c ? "on" : ""}`} onClick={() => setCuisine(cuisine === c ? undefined : c)}>
+                        {c}
+                      </button>
+                    ))}
+                  </ChipRow>
+                </>
+              )}
+              {types.length > 0 && (
+                <>
+                  <div class="filter-label">Type</div>
+                  <ChipRow>
+                    <button class={`pill ${!category ? "on" : ""}`} onClick={() => setCategory(undefined)}>Any</button>
+                    {types.map((c) => (
+                      <button key={c} class={`pill ${category === c ? "on" : ""}`} onClick={() => setCategory(category === c ? undefined : c)}>
+                        {c}
+                      </button>
+                    ))}
+                  </ChipRow>
+                </>
+              )}
             </div>
           )}
-          <div class="filter-label">Meal</div>
-          <ChipRow>
-            <button class={`pill ${!meal ? "on" : ""}`} onClick={() => setMeal(undefined)}>Any</button>
-            {config.meals.map((m) => (
-              <button key={m.id} class={`pill ${meal === m.id ? "on" : ""}`} onClick={() => setMeal(meal === m.id ? undefined : m.id)}>
-                {m.label}
-              </button>
-            ))}
-          </ChipRow>
-          <div class="filter-label">
-            Dietary &amp; allergies
-            {dietary.length > 0 && (
-              <button type="button" class="filter-clear" onClick={() => setDietary([])}>Clear</button>
-            )}
-          </div>
-          <ChipRow>
-            {config.dietary.map((d) => (
-              <button
-                key={d.id}
-                class={`pill ${dietary.includes(d.id) ? "on" : ""}`}
-                aria-pressed={dietary.includes(d.id)}
-                onClick={() => setDietary((list) => toggleIn(list, d.id))}
-              >
-                {d.label}
-              </button>
-            ))}
-          </ChipRow>
-          <div class="filter-label">
-            Nutrition
-            {!goalsAvailable && <span class="filter-hint">Needs AI ideas</span>}
-            {goalsAvailable && goals.length > 0 && (
-              <button type="button" class="filter-clear" onClick={() => setGoals([])}>Clear</button>
-            )}
-          </div>
-          <ChipRow>
-            {config.goals.map((g) => (
-              <button
-                key={g.id}
-                class={`pill ${activeGoals.includes(g.id) ? "on" : ""}`}
-                aria-pressed={activeGoals.includes(g.id)}
-                disabled={!goalsAvailable}
-                onClick={() => setGoals((list) => toggleIn(list, g.id))}
-              >
-                {g.label}
-              </button>
-            ))}
-          </ChipRow>
-          {config.cuisines.length > 0 && (
-            <>
-              <div class="filter-label">Cuisine</div>
-              <ChipRow>
-                <button class={`pill ${!cuisine ? "on" : ""}`} onClick={() => setCuisine(undefined)}>Any</button>
-                {config.cuisines.map((c) => (
-                  <button key={c} class={`pill ${cuisine === c ? "on" : ""}`} onClick={() => setCuisine(cuisine === c ? undefined : c)}>
-                    {c}
+
+          {note && !error && <p class="note">{note}</p>}
+          {error && (
+            <div class="empty">
+              <p>{error}</p>
+              <button class="btn" onClick={() => deal(false)}>Try again</button>
+            </div>
+          )}
+
+          {!error && cards.length > 0 && <Deck cards={cards} saved={false} onDecide={decide} onOpen={setDetailCard} />}
+
+          {!error && cards.length === 0 && (
+            <div class="empty">
+              {loading ? (
+                <>
+                  <div class="spinner" />
+                  <p>{willUseAi ? "Cooking up ideas…" : "Shuffling the deck…"}</p>
+                </>
+              ) : (
+                <>
+                  <p>{exhausted ? "That's every idea for these filters." : "No cards yet."}</p>
+                  <button class="btn" onClick={() => deal(false)}>
+                    <IconRefresh size={18} /> Deal again
                   </button>
-                ))}
-              </ChipRow>
-            </>
+                </>
+              )}
+            </div>
           )}
-          {types.length > 0 && (
-            <>
-              <div class="filter-label">Type</div>
-              <ChipRow>
-                <button class={`pill ${!category ? "on" : ""}`} onClick={() => setCategory(undefined)}>Any</button>
-                {types.map((c) => (
-                  <button key={c} class={`pill ${category === c ? "on" : ""}`} onClick={() => setCategory(category === c ? undefined : c)}>
-                    {c}
-                  </button>
-                ))}
-              </ChipRow>
-            </>
-          )}
-        </div>
-      )}
-
-      {note && !error && <p class="note">{note}</p>}
-      {error && (
-        <div class="empty">
-          <p>{error}</p>
-          <button class="btn" onClick={() => deal(false)}>Try again</button>
-        </div>
-      )}
-
-      {!error && cards.length > 0 && (
-        <Deck cards={cards} saved={source === "saved"} onDecide={decide} onOpen={setDetailCard} />
-      )}
-
-      {!error && cards.length === 0 && (
-        <div class="empty">
-          {loading ? (
-            <>
-              <div class="spinner" />
-              <p>{willUseAi ? "Cooking up ideas…" : "Shuffling the deck…"}</p>
-            </>
-          ) : (
-            <>
-              <p>{exhausted ? "That's every idea for these filters." : "No cards yet."}</p>
-              <button class="btn" onClick={() => deal(false)}>
-                <IconRefresh size={18} /> Deal again
-              </button>
-            </>
-          )}
-        </div>
+        </>
       )}
 
       <PlanSheet card={planCard} days={props.days} today={props.today} busy={saving} onPick={pickSlot} onClose={closePlan} />
