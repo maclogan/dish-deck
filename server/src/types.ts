@@ -3,6 +3,37 @@
 export type CardSource = "mealdb" | "ai" | "mealie";
 export type MealType = "lunch" | "dinner";
 
+/** Dietary restrictions and allergies, enforced by checking ingredients. */
+export type DietId =
+  | "vegetarian"
+  | "vegan"
+  | "pescatarian"
+  | "gluten-free"
+  | "dairy-free"
+  | "egg-free"
+  | "nut-free"
+  | "shellfish-free"
+  | "soy-free";
+/** Which meal of the day (or course) a dish is for. Broader than MealType, which is a Mealie plan slot. */
+export type MealFilter = "breakfast" | "lunch" | "dinner" | "dessert" | "snack";
+/** Nutrition goals, checked against per-serving nutrition. */
+export type GoalId = "low-calorie" | "low-carb" | "keto" | "high-protein" | "high-fiber" | "low-fat";
+
+/** Per-serving nutrition, when known (AI estimates or Mealie's nutrition fields). */
+export interface Nutrition {
+  calories?: number;
+  /** Grams. */
+  protein?: number;
+  carbs?: number;
+  fat?: number;
+  fiber?: number;
+}
+
+export interface FilterOption<T extends string> {
+  id: T;
+  label: string;
+}
+
 /** One swipeable recipe card. */
 export interface Card {
   /** Stable key used to avoid showing the same card twice, e.g. "mealdb:52772". */
@@ -19,6 +50,8 @@ export interface Card {
   ingredients: string[];
   instructions: string[];
   sourceUrl?: string;
+  /** Per-serving nutrition, when known. AI values are estimates. */
+  nutrition?: Nutrition;
   /** Which meals this suits, when known. */
   suits?: MealType[];
   /** On-hand info (present when the server could check Mealie's on-hand foods). */
@@ -34,12 +67,30 @@ export interface DeckRequest {
   ai?: boolean;
   cuisine?: string;
   category?: string;
+  /** Restrictions every card must satisfy (checked against ingredients). */
+  dietary?: DietId[];
+  meal?: MealFilter;
+  /** Nutrition goals. New ideas need AI for these; saved recipes use Mealie nutrition or tags. */
+  goals?: GoalId[];
   onHand: boolean;
   /** Max missing ingredients allowed when onHand is true. */
   leniency: number;
   count: number;
   /** Card keys the user has already seen this session. */
   exclude: string[];
+}
+
+/** A saved recipe in the recipe book grid, with filter matches worked out on the server. */
+export interface BookRecipe extends Card {
+  /** Which dietary, meal and nutrition filters this recipe passes. */
+  fits: { diets: DietId[]; meals: MealFilter[]; goals: GoalId[] };
+  rating?: number;
+  /** ISO date the recipe was added to Mealie, when known. */
+  addedAt?: string;
+}
+
+export interface BookResponse {
+  recipes: BookRecipe[];
 }
 
 export interface DeckResponse {
@@ -106,4 +157,7 @@ export interface AppConfigResponse {
   mealieUrl?: string;
   cuisines: string[];
   categories: string[];
+  dietary: FilterOption<DietId>[];
+  meals: FilterOption<MealFilter>[];
+  goals: FilterOption<GoalId>[];
 }

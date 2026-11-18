@@ -1,6 +1,7 @@
 import type {
   AppConfigResponse,
   ApplyRequest,
+  BookResponse,
   DeckRequest,
   DeckResponse,
   GenerateRequest,
@@ -69,6 +70,7 @@ export const api = {
   config: () => call<AppConfigResponse>("GET", "/api/config"),
   deck: (req: DeckRequest) => call<DeckResponse>("POST", "/api/deck", req),
   save: (req: SaveRequest) => call<SaveResponse>("POST", "/api/save", req),
+  recipes: () => call<BookResponse>("GET", "/api/recipes"),
   week: () => call<WeekResponse>("GET", "/api/week"),
   generate: (req: GenerateRequest) => call<WeekResponse>("POST", "/api/plan/generate", req),
   apply: (req: ApplyRequest) => call<{ created: number; removed: number; skipped: number }>("POST", "/api/plan/apply", req),

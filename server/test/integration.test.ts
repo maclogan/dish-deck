@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
 import type { Config } from "../src/config.js";
 import { MealieClient, type MealiePlanEntry, type MealieRecipe } from "../src/mealie.js";
-import { Service } from "../src/service.js";
+import { Service, imageSig } from "../src/service.js";
 import type { AiRecipes } from "../src/sources/ai.js";
 import { MealDb } from "../src/sources/mealdb.js";
 import { mealieRecipe, teriyakiMeal } from "./fixtures.js";
@@ -157,6 +157,34 @@ describe("deck", () => {
     expect(warnings[0]).toMatch(/529 overloaded/);
   });
 
+  it("drops TheMealDB dishes that break a dietary restriction", async () => {
+    const { service } = setup();
+    const res = await service.deck({ source: "new", onHand: false, leniency: 2, count: 4, exclude: [], dietary: ["vegetarian"] });
+    expect(res.cards).toHaveLength(0); // the only fake meal is a chicken casserole
+    expect(res.note).toContain("Vegetarian");
+  });
+
+  it("uses AI for nutrition goals and drops AI ideas that miss them", async () => {
+    const m = fakeMealie();
+    const base = { source: "ai" as const, tags: [], ingredients: ["2 chicken breasts", "1 cup broccoli"], instructions: ["Cook."] };
+    const ai = {
+      generate: async () => [
+        { ...base, key: "ai:lean", title: "Lean Chicken Bowl", nutrition: { calories: 450, protein: 42, carbs: 20, fat: 10, fiber: 6 } },
+        { ...base, key: "ai:light", title: "Light Salad", nutrition: { calories: 250, protein: 8, carbs: 15, fat: 9, fiber: 7 } },
+      ],
+    } as unknown as AiRecipes;
+    const service = new Service({
+      config,
+      mealie: new MealieClient(config.mealieUrl, config.mealieToken, m.fetchImpl),
+      mealdb: fakeMealDb(),
+      ai,
+      now: () => new Date("2026-11-18T18:00:00Z"),
+    });
+    const res = await service.deck({ source: "new", onHand: false, leniency: 2, count: 4, exclude: [], goals: ["high-protein"] });
+    expect(res.cards.map((c) => c.title)).toEqual(["Lean Chicken Bowl"]);
+    expect(res.note).toBe("AI ideas · High protein");
+  });
+
   it("skips cards already shown or already in the recipe book", async () => {
     const { service } = setup();
     const res = await service.deck({ source: "new", onHand: false, leniency: 2, count: 4, exclude: ["mealdb:52772"] });
@@ -178,6 +206,40 @@ describe("deck", () => {
     const { service } = setup();
     const res = await service.deck({ source: "saved", onHand: false, leniency: 2, count: 5, exclude: [], mood: "indian" });
     expect(res.cards.map((c) => c.title)).toEqual(["Chicken Tikka Masala"]);
+  });
+});
+
+describe("recipe book", () => {
+  it("lists every saved recipe with the filters it passes", async () => {
+    const { service } = setup();
+    const { recipes } = await service.book();
+    expect(recipes.map((r) => r.title).sort()).toEqual([
+      "Beef Tacos",
+      "Chicken Tikka Masala",
+      "Greek Salad",
+      "Lentil Curry",
+      "Salmon Sheet Pan",
+    ]);
+    const byTitle = (t: string) => recipes.find((r) => r.title === t)!;
+    expect(byTitle("Lentil Curry").fits.diets).toEqual(expect.arrayContaining(["vegetarian", "vegan", "gluten-free"]));
+    expect(byTitle("Chicken Tikka Masala").fits.diets).not.toContain("vegetarian");
+    expect(byTitle("Greek Salad").fits.diets).toContain("vegetarian");
+    expect(byTitle("Greek Salad").fits.diets).not.toContain("dairy-free");
+    expect(byTitle("Salmon Sheet Pan").fits.diets).toContain("pescatarian");
+    expect(byTitle("Beef Tacos").fits.diets).not.toContain("gluten-free");
+    expect(byTitle("Greek Salad").fits.meals).toContain("lunch");
+    expect(byTitle("Greek Salad").fits.meals).not.toContain("dessert");
+  });
+
+  it("signs image URLs only when a passcode is set", async () => {
+    const { service } = setup();
+    const card = (await service.book()).recipes[0]!;
+    // The fixtures have no photos; check the URL builder directly.
+    const open = new Service({ config, mealie: {} as MealieClient, mealdb: fakeMealDb() });
+    const locked = new Service({ config: { ...config, appPasscode: "secret" }, mealie: {} as MealieClient, mealdb: fakeMealDb() });
+    const url = (s: Service) => (s as unknown as { imageUrl(id: string, v: string): string }).imageUrl(card.mealie!.id, "abc");
+    expect(url(open)).toBe(`/api/mealie-image/${card.mealie!.id}?v=abc`);
+    expect(url(locked)).toBe(`/api/mealie-image/${card.mealie!.id}?v=abc&sig=${imageSig("secret", card.mealie!.id)}`);
   });
 });
 
@@ -257,6 +319,20 @@ describe("HTTP API", () => {
     expect(ok.json().days).toHaveLength(7);
     const bad = await app.inject({ method: "POST", url: "/api/deck", headers: { "x-app-passcode": "secret" }, payload: { source: "nope" } });
     expect(bad.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it("lets signed image URLs through the passcode check", async () => {
+    const { service } = setup();
+    const app = buildApp({ ...config, appPasscode: "secret" }, { service });
+    // An invalid id stops at the route's own 400, so no request leaves the test.
+    const id = "not-a-uuid";
+    const unsigned = await app.inject({ method: "GET", url: `/api/mealie-image/${id}` });
+    expect(unsigned.statusCode).toBe(401);
+    const forged = await app.inject({ method: "GET", url: `/api/mealie-image/${id}?sig=${imageSig("wrong", id)}` });
+    expect(forged.statusCode).toBe(401);
+    const signed = await app.inject({ method: "GET", url: `/api/mealie-image/${id}?v=abc&sig=${imageSig("secret", id)}` });
+    expect(signed.statusCode).toBe(400);
     await app.close();
   });
 });

@@ -14,6 +14,8 @@ Dish Deck is a small, mobile-first web app you install on your phone (it's a PWA
   - **New ideas** come from [TheMealDB](https://www.themealdb.com) (free), or from Claude when you type a craving and add an API key.
   - **Our recipes** deals from the recipes already in your Mealie.
 - **"What sounds good?"**: type a mood ("cozy soup", "something with salmon") or pick a cuisine or dish type.
+- **Recipe book**: the Recipes tab shows every saved Mealie recipe as a grid of cards. Search by name or ingredient, filter by meal, dietary needs, nutrition, category/tag or "have everything on hand", and sort by name, newest, quickest, rating or fewest missing ingredients. Tap a card to see it or add it to this week.
+- **Filters**: meal (breakfast, lunch, dinner, dessert, snack), dietary restrictions and allergies (vegetarian, vegan, pescatarian, gluten-, dairy-, egg-, nut-, shellfish- and soy-free) and nutrition goals (low calorie, low carb, keto, high protein, high fiber, low fat). Dietary filters check every card's ingredients, whatever the source. Nutrition goals use AI estimates for new ideas (TheMealDB has no nutrition data) and Mealie's nutrition fields or tags for saved recipes.
 - **Use what's on hand**: only show dishes you can mostly make with the foods marked *on hand* in Mealie, allowing up to *N* missing ingredients. For saved recipes it uses Mealie's own recipe finder.
 - **Randomize this week**: fills open lunch and dinner slots for the next 7 days from your saved recipes, then lets you reroll any slot before saving. It's rules-based, so it's free and predictable:
   - dinners that make leftovers become the next day's lunch

@@ -1,6 +1,17 @@
-import type { ComponentChildren } from "preact";
+import { ChipRow, toggleIn } from "./ChipRow";
 import { useEffect, useRef, useState } from "preact/hooks";
-import { api, storageGet, storageSet, type AppConfigResponse, type Card, type MealType, type PlanDay } from "../api";
+import {
+  api,
+  storageGet,
+  storageSet,
+  type AppConfigResponse,
+  type Card,
+  type DietId,
+  type GoalId,
+  type MealFilter,
+  type MealType,
+  type PlanDay,
+} from "../api";
 import { IconRefresh, IconSearch, IconSliders, IconSparkle } from "../icons";
 import { Deck, type Action } from "./Deck";
 import { DetailSheet } from "./DetailSheet";
@@ -12,87 +23,26 @@ interface Prefs {
   source: Source;
   onHand: boolean;
   leniency: number;
+  /** Dietary restrictions and allergies stick around between visits. */
+  dietary: DietId[];
 }
 
 function loadPrefs(): Prefs {
   try {
     const p = JSON.parse(storageGet("dishdeck.prefs") ?? "{}");
-    return { source: p.source === "saved" ? "saved" : "new", onHand: !!p.onHand, leniency: Number.isFinite(p.leniency) ? p.leniency : 2 };
+    return {
+      source: p.source === "saved" ? "saved" : "new",
+      onHand: !!p.onHand,
+      leniency: Number.isFinite(p.leniency) ? p.leniency : 2,
+      dietary: Array.isArray(p.dietary) ? p.dietary.filter((d: unknown) => typeof d === "string") : [],
+    };
   } catch {
-    return { source: "new", onHand: false, leniency: 2 };
+    return { source: "new", onHand: false, leniency: 2, dietary: [] };
   }
 }
 
-/**
- * Horizontally scrolling row of pills. Touch scrolls natively; a vertical mouse
- * wheel is turned into horizontal scrolling, and the row can be dragged with a mouse.
- */
-function ChipRow(props: { children: ComponentChildren }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const drag = useRef<{ id: number; x: number; left: number; moved: boolean } | null>(null);
-  const [dragging, setDragging] = useState(false);
+const COVERED_CATEGORIES = new Set(["breakfast", "dessert", "starter", "side", "vegan", "vegetarian"]);
 
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const onWheel = (e: WheelEvent) => {
-      if (e.ctrlKey || Math.abs(e.deltaX) >= Math.abs(e.deltaY)) return;
-      const max = el.scrollWidth - el.clientWidth;
-      if (max <= 0) return;
-      const delta = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? el.clientWidth : 1);
-      // At an edge, let the page scroll instead of trapping the wheel.
-      if ((delta < 0 && el.scrollLeft <= 0) || (delta > 0 && el.scrollLeft >= max - 1)) return;
-      e.preventDefault();
-      el.scrollLeft += delta;
-    };
-    el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
-  }, []);
-
-  const onPointerDown = (e: PointerEvent) => {
-    if (e.pointerType !== "mouse" || e.button !== 0 || !ref.current) return;
-    drag.current = { id: e.pointerId, x: e.clientX, left: ref.current.scrollLeft, moved: false };
-  };
-  const onPointerMove = (e: PointerEvent) => {
-    const d = drag.current;
-    const el = ref.current;
-    if (!d || !el || e.pointerId !== d.id) return;
-    const dx = e.clientX - d.x;
-    if (!d.moved && Math.abs(dx) > 5) {
-      d.moved = true;
-      el.setPointerCapture(e.pointerId);
-      setDragging(true);
-    }
-    if (d.moved) el.scrollLeft = d.left - dx;
-  };
-  const endDrag = () => {
-    drag.current = null;
-    setDragging(false);
-  };
-  // Swallow the click that ends a drag so it doesn't toggle a pill.
-  const onClickCapture = (e: MouseEvent) => {
-    if (drag.current?.moved) {
-      e.preventDefault();
-      e.stopPropagation();
-    }
-    drag.current = null;
-  };
-
-  return (
-    <div
-      ref={ref}
-      class={`chip-row ${dragging ? "dragging" : ""}`}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={() => setDragging(false)}
-      onPointerCancel={endDrag}
-      onLostPointerCapture={() => setDragging(false)}
-      onClickCapture={onClickCapture}
-    >
-      {props.children}
-    </div>
-  );
-}
 
 export function Discover(props: {
   config: AppConfigResponse;
@@ -111,7 +61,13 @@ export function Discover(props: {
   const [mood, setMood] = useState("");
   const [cuisine, setCuisine] = useState<string | undefined>();
   const [category, setCategory] = useState<string | undefined>();
+  const [meal, setMeal] = useState<MealFilter | undefined>();
+  const [dietary, setDietary] = useState<DietId[]>(initial.dietary);
+  const [goals, setGoals] = useState<GoalId[]>([]);
   const [showFilters, setShowFilters] = useState(false);
+  // TheMealDB has no nutrition data: on "New ideas", goals only work with AI.
+  const goalsAvailable = source === "saved" || props.aiOn;
+  const activeGoals = goalsAvailable ? goals : [];
 
   const [cards, setCards] = useState<Card[]>([]);
   const [loading, setLoading] = useState(false);
@@ -126,8 +82,8 @@ export function Discover(props: {
   const requestId = useRef(0);
 
   useEffect(() => {
-    storageSet("dishdeck.prefs", JSON.stringify({ source, onHand, leniency }));
-  }, [source, onHand, leniency]);
+    storageSet("dishdeck.prefs", JSON.stringify({ source, onHand, leniency, dietary }));
+  }, [source, onHand, leniency, dietary.join()]);
 
   const deal = async (append: boolean) => {
     const id = ++requestId.current;
@@ -142,6 +98,9 @@ export function Discover(props: {
         ai: props.aiOn,
         cuisine,
         category,
+        meal,
+        dietary,
+        goals: activeGoals,
         onHand,
         leniency,
         count: 8,
@@ -165,16 +124,16 @@ export function Discover(props: {
   // First deal, and re-deal when the deck source or filters change.
   useEffect(() => {
     deal(false);
-  }, [source, cuisine, category, onHand, leniency]);
+  }, [source, cuisine, category, meal, dietary.join(), goals.join(), onHand, leniency]);
 
-  // Flipping the AI toggle only changes results for a typed search on the "New ideas" deck.
+  // Flipping the AI toggle only changes "New ideas" results for a typed search or nutrition goals.
   const aiFirstRun = useRef(true);
   useEffect(() => {
     if (aiFirstRun.current) {
       aiFirstRun.current = false;
       return;
     }
-    if (source === "new" && mood.trim()) deal(false);
+    if (source === "new" && (mood.trim() || goals.length)) deal(false);
   }, [props.aiOn]);
 
   // Keep the deck topped up.
@@ -237,8 +196,11 @@ export function Discover(props: {
     deal(false);
   };
 
-  const filterCount = (cuisine ? 1 : 0) + (category ? 1 : 0) + (onHand ? 1 : 0);
-  const willUseAi = props.aiOn && source === "new" && mood.trim().length > 0;
+  const filterCount =
+    (cuisine ? 1 : 0) + (category ? 1 : 0) + (onHand ? 1 : 0) + (meal ? 1 : 0) + dietary.length + activeGoals.length;
+  const willUseAi = props.aiOn && source === "new" && (mood.trim().length > 0 || activeGoals.length > 0);
+  // These TheMealDB categories are covered by the Meal and Dietary filters.
+  const types = config.categories.filter((c) => !COVERED_CATEGORIES.has(c.toLowerCase()));
 
   return (
     <div class="discover">
@@ -299,6 +261,53 @@ export function Discover(props: {
               <span>missing</span>
             </div>
           )}
+          <div class="filter-label">Meal</div>
+          <ChipRow>
+            <button class={`pill ${!meal ? "on" : ""}`} onClick={() => setMeal(undefined)}>Any</button>
+            {config.meals.map((m) => (
+              <button key={m.id} class={`pill ${meal === m.id ? "on" : ""}`} onClick={() => setMeal(meal === m.id ? undefined : m.id)}>
+                {m.label}
+              </button>
+            ))}
+          </ChipRow>
+          <div class="filter-label">
+            Dietary &amp; allergies
+            {dietary.length > 0 && (
+              <button type="button" class="filter-clear" onClick={() => setDietary([])}>Clear</button>
+            )}
+          </div>
+          <ChipRow>
+            {config.dietary.map((d) => (
+              <button
+                key={d.id}
+                class={`pill ${dietary.includes(d.id) ? "on" : ""}`}
+                aria-pressed={dietary.includes(d.id)}
+                onClick={() => setDietary((list) => toggleIn(list, d.id))}
+              >
+                {d.label}
+              </button>
+            ))}
+          </ChipRow>
+          <div class="filter-label">
+            Nutrition
+            {!goalsAvailable && <span class="filter-hint">Needs AI ideas</span>}
+            {goalsAvailable && goals.length > 0 && (
+              <button type="button" class="filter-clear" onClick={() => setGoals([])}>Clear</button>
+            )}
+          </div>
+          <ChipRow>
+            {config.goals.map((g) => (
+              <button
+                key={g.id}
+                class={`pill ${activeGoals.includes(g.id) ? "on" : ""}`}
+                aria-pressed={activeGoals.includes(g.id)}
+                disabled={!goalsAvailable}
+                onClick={() => setGoals((list) => toggleIn(list, g.id))}
+              >
+                {g.label}
+              </button>
+            ))}
+          </ChipRow>
           {config.cuisines.length > 0 && (
             <>
               <div class="filter-label">Cuisine</div>
@@ -312,12 +321,12 @@ export function Discover(props: {
               </ChipRow>
             </>
           )}
-          {config.categories.length > 0 && (
+          {types.length > 0 && (
             <>
               <div class="filter-label">Type</div>
               <ChipRow>
                 <button class={`pill ${!category ? "on" : ""}`} onClick={() => setCategory(undefined)}>Any</button>
-                {config.categories.map((c) => (
+                {types.map((c) => (
                   <button key={c} class={`pill ${category === c ? "on" : ""}`} onClick={() => setCategory(category === c ? undefined : c)}>
                     {c}
                   </button>

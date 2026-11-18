@@ -96,18 +96,27 @@ export class MealDb {
    * Find candidate meals. Filters by cuisine/category when given; otherwise tries to read the
    * mood text as a cuisine, category, main ingredient or dish name; otherwise random meals.
    */
-  async candidates(opts: { cuisine?: string; category?: string; mood?: string; want: number }): Promise<{
+  async candidates(opts: {
+    cuisine?: string;
+    category?: string;
+    /** Extra categories (any of them) used when no explicit category is chosen, e.g. for a meal or diet filter. */
+    categories?: string[];
+    mood?: string;
+    want: number;
+  }): Promise<{
     refs: MealRef[];
     note: string;
   }> {
-    const { cuisine, category, mood, want } = opts;
+    const { cuisine, mood, want } = opts;
+    const cats = opts.category ? [opts.category] : (opts.categories ?? []);
+    const category = cats.join(" / ") || undefined;
 
-    if (cuisine || category) {
-      const lists = await Promise.all([
+    if (cuisine || cats.length) {
+      const [a, ...byCat] = await Promise.all([
         cuisine ? this.filter("a", cuisine) : null,
-        category ? this.filter("c", category) : null,
+        ...cats.map((c) => this.filter("c", c)),
       ]);
-      const [a, c] = lists;
+      const c = byCat.length ? byCat.flatMap((l) => l ?? []) : null;
       let refs = a ?? c ?? [];
       if (a && c) {
         const ids = new Set(c.map((r) => r.id));
@@ -118,10 +127,10 @@ export class MealDb {
 
     if (mood?.trim()) {
       const text = normalize(mood);
-      const [areas, cats] = await Promise.all([this.areas(), this.categories()]);
+      const [areas, allCats] = await Promise.all([this.areas(), this.categories()]);
       const area = areas.find((a) => text.includes(normalize(a)));
-      const cat = cats.find((c) => text.includes(normalize(c)));
-      if (area || cat) return this.candidates({ cuisine: area, category: cat, want });
+      const cat = allCats.find((c) => text.includes(normalize(c)));
+      if (area || cat) return this.candidates({ cuisine: area, category: cat, categories: opts.categories, want });
 
       const byName = await this.search(mood.trim());
       if (byName.length) return { refs: shuffle(byName), note: `Matches for "${mood.trim()}"` };
