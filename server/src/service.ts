@@ -1,5 +1,6 @@
 // Business logic: building decks, saving to Mealie, and planning the week.
 
+import { createHmac } from "node:crypto";
 import type { Config } from "./config.js";
 import { buildOnHandMatcher, onHandProteins, type OnHandMatcher } from "./ingredients.js";
 import {
@@ -11,6 +12,9 @@ import {
   type MealieUser,
 } from "./mealie.js";
 import {
+  DIET_IDS,
+  GOAL_IDS,
+  MEAL_IDS,
   dietLabel,
   fitsDiet,
   fitsGoals,
@@ -26,6 +30,8 @@ import type { AiRecipes } from "./sources/ai.js";
 import { mealDbToCard, type MealDb } from "./sources/mealdb.js";
 import type {
   ApplyRequest,
+  BookRecipe,
+  BookResponse,
   Card,
   DeckRequest,
   DeckResponse,
@@ -110,9 +116,39 @@ export class Service {
     return this.onHand;
   }
 
+  /** Proxied image URL. `v` changes when the photo does (busting the day-long cache); `sig` stands in for the passcode. */
+  private imageUrl(id: string, version: string) {
+    const params = new URLSearchParams({ v: version });
+    if (this.config.appPasscode) params.set("sig", imageSig(this.config.appPasscode, id));
+    return `/api/mealie-image/${id}?${params}`;
+  }
+
   private async recipeLink(slug: string) {
     const user = await this.self().catch(() => undefined);
     return recipeUrl(this.config.mealiePublicUrl, user?.groupSlug, slug);
+  }
+
+  // ------------------------------------------------------------------ recipe book
+
+  /** Every saved recipe as a card, with on-hand info and which filters it passes. */
+  async book(): Promise<BookResponse> {
+    const [details, onHand] = await Promise.all([this.recipeDetails(), this.onHandFoods().catch(() => undefined)]);
+    const recipes = await mapLimit(details, 8, async (r): Promise<BookRecipe> => {
+      const ingredients = (r.recipeIngredient ?? []).map(ingredientText).filter(Boolean);
+      const card = await this.cardFromMealie(r, ingredients);
+      if (onHand && ingredients.length) card.onHand = onHand.matcher.check(ingredients);
+      return {
+        ...card,
+        fits: {
+          diets: DIET_IDS.filter((d) => fitsDiet(ingredients, [d])),
+          meals: MEAL_IDS.filter((m) => fitsMeal(card, m)),
+          goals: GOAL_IDS.filter((g) => fitsGoals(card, [g])),
+        },
+        rating: r.rating ?? undefined,
+        addedAt: r.dateAdded ?? r.createdAt ?? undefined,
+      };
+    });
+    return { recipes };
   }
 
   // ------------------------------------------------------------------ deck
@@ -174,7 +210,7 @@ export class Service {
       source: "mealie",
       title: r.name,
       description: r.description || undefined,
-      image: r.image ? `/api/mealie-image/${r.id}` : undefined,
+      image: r.image ? this.imageUrl(r.id, r.image) : undefined,
       tags: (r.tags ?? []).map((t) => t.name),
       category: r.recipeCategory?.[0]?.name,
       totalMinutes: r.totalTimeSeconds ? Math.round(r.totalTimeSeconds / 60) : parseMinutes(r.totalTime),
@@ -396,6 +432,11 @@ export class Service {
 }
 
 /** Build a schema.org Recipe object for Mealie's JSON importer. */
+/** Signature that lets an <img> load a proxied Mealie image without the passcode header. */
+export function imageSig(secret: string, id: string): string {
+  return createHmac("sha256", secret).update(`mealie-image:${id}`).digest("base64url").slice(0, 32);
+}
+
 /** " · Dinner · Vegan · High protein" for the deck note, or "" when no extra filters are on. */
 export function filterSuffix(req: Pick<DeckRequest, "meal" | "dietary" | "goals">): string {
   const parts = [

@@ -1,11 +1,17 @@
 import type { Card } from "../api";
 import { canonicalWords } from "../text";
 import { IconBook, IconCalendar, IconExternal, IconX } from "../icons";
-import { OnHandBadge, Placeholder } from "./CardFace";
+import { OnHandBadge, RecipeImage } from "./CardFace";
 import { Sheet } from "./Sheet";
 import type { Action } from "./Deck";
 
-export function DetailSheet(props: { card: Card | null; onClose: () => void; onAction: (card: Card, action: Action) => void }) {
+export function DetailSheet(props: {
+  card: Card | null;
+  onClose: () => void;
+  onAction: (card: Card, action: Action) => void;
+  /** Browsing the recipe book: there's nothing to skip, so hide that button. */
+  hideSkip?: boolean;
+}) {
   const { card } = props;
   const missing = new Set((card?.onHand?.missing ?? []).map(canonicalWords));
   const isMissing = (line: string) => [...missing].some((m) => m && canonicalWords(line).includes(m));
@@ -15,7 +21,7 @@ export function DetailSheet(props: { card: Card | null; onClose: () => void; onA
       {card && (
         <div class="detail">
           <div class="detail-image">
-            {card.image ? <img src={card.image} alt="" /> : <Placeholder title={card.title} />}
+            <RecipeImage card={card} lazy={false} />
           </div>
           <div class="chips">
             {card.cuisine && <span class="chip">{card.cuisine}</span>}
@@ -64,9 +70,11 @@ export function DetailSheet(props: { card: Card | null; onClose: () => void; onA
           )}
 
           <div class="detail-actions">
-            <button class="btn ghost" onClick={() => props.onAction(card, "skip")}>
-              <IconX size={18} /> Skip
-            </button>
+            {!props.hideSkip && (
+              <button class="btn ghost" onClick={() => props.onAction(card, "skip")}>
+                <IconX size={18} /> Skip
+              </button>
+            )}
             {card.source !== "mealie" && (
               <button class="btn sage" onClick={() => props.onAction(card, "book")}>
                 <IconBook size={18} /> Save

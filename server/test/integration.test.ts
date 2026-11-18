@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
 import type { Config } from "../src/config.js";
 import { MealieClient, type MealiePlanEntry, type MealieRecipe } from "../src/mealie.js";
-import { Service } from "../src/service.js";
+import { Service, imageSig } from "../src/service.js";
 import type { AiRecipes } from "../src/sources/ai.js";
 import { MealDb } from "../src/sources/mealdb.js";
 import { mealieRecipe, teriyakiMeal } from "./fixtures.js";
@@ -209,6 +209,40 @@ describe("deck", () => {
   });
 });
 
+describe("recipe book", () => {
+  it("lists every saved recipe with the filters it passes", async () => {
+    const { service } = setup();
+    const { recipes } = await service.book();
+    expect(recipes.map((r) => r.title).sort()).toEqual([
+      "Beef Tacos",
+      "Chicken Tikka Masala",
+      "Greek Salad",
+      "Lentil Curry",
+      "Salmon Sheet Pan",
+    ]);
+    const byTitle = (t: string) => recipes.find((r) => r.title === t)!;
+    expect(byTitle("Lentil Curry").fits.diets).toEqual(expect.arrayContaining(["vegetarian", "vegan", "gluten-free"]));
+    expect(byTitle("Chicken Tikka Masala").fits.diets).not.toContain("vegetarian");
+    expect(byTitle("Greek Salad").fits.diets).toContain("vegetarian");
+    expect(byTitle("Greek Salad").fits.diets).not.toContain("dairy-free");
+    expect(byTitle("Salmon Sheet Pan").fits.diets).toContain("pescatarian");
+    expect(byTitle("Beef Tacos").fits.diets).not.toContain("gluten-free");
+    expect(byTitle("Greek Salad").fits.meals).toContain("lunch");
+    expect(byTitle("Greek Salad").fits.meals).not.toContain("dessert");
+  });
+
+  it("signs image URLs only when a passcode is set", async () => {
+    const { service } = setup();
+    const card = (await service.book()).recipes[0]!;
+    // The fixtures have no photos; check the URL builder directly.
+    const open = new Service({ config, mealie: {} as MealieClient, mealdb: fakeMealDb() });
+    const locked = new Service({ config: { ...config, appPasscode: "secret" }, mealie: {} as MealieClient, mealdb: fakeMealDb() });
+    const url = (s: Service) => (s as unknown as { imageUrl(id: string, v: string): string }).imageUrl(card.mealie!.id, "abc");
+    expect(url(open)).toBe(`/api/mealie-image/${card.mealie!.id}?v=abc`);
+    expect(url(locked)).toBe(`/api/mealie-image/${card.mealie!.id}?v=abc&sig=${imageSig("secret", card.mealie!.id)}`);
+  });
+});
+
 describe("save", () => {
   it("creates the recipe in Mealie and adds it to the meal plan", async () => {
     const { service, calls, plans } = setup();
@@ -285,6 +319,20 @@ describe("HTTP API", () => {
     expect(ok.json().days).toHaveLength(7);
     const bad = await app.inject({ method: "POST", url: "/api/deck", headers: { "x-app-passcode": "secret" }, payload: { source: "nope" } });
     expect(bad.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it("lets signed image URLs through the passcode check", async () => {
+    const { service } = setup();
+    const app = buildApp({ ...config, appPasscode: "secret" }, { service });
+    // An invalid id stops at the route's own 400, so no request leaves the test.
+    const id = "not-a-uuid";
+    const unsigned = await app.inject({ method: "GET", url: `/api/mealie-image/${id}` });
+    expect(unsigned.statusCode).toBe(401);
+    const forged = await app.inject({ method: "GET", url: `/api/mealie-image/${id}?sig=${imageSig("wrong", id)}` });
+    expect(forged.statusCode).toBe(401);
+    const signed = await app.inject({ method: "GET", url: `/api/mealie-image/${id}?v=abc&sig=${imageSig("secret", id)}` });
+    expect(signed.statusCode).toBe(400);
     await app.close();
   });
 });

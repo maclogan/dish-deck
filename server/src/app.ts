@@ -9,7 +9,7 @@ import { z } from "zod";
 import type { Config } from "./config.js";
 import { DIETS, DIET_IDS, GOALS, GOAL_IDS, MEALS, MEAL_IDS } from "./filters.js";
 import { MealieClient, MealieError } from "./mealie.js";
-import { Service } from "./service.js";
+import { Service, imageSig } from "./service.js";
 import { AiRecipes } from "./sources/ai.js";
 import { MealDb } from "./sources/mealdb.js";
 import type { AppConfigResponse } from "./types.js";
@@ -117,6 +117,12 @@ export function buildApp(config: Config, overrides: Partial<{ service: Service; 
     if (!config.appPasscode) return;
     const url = req.url.split("?")[0]!;
     if (!url.startsWith("/api/") || url === "/api/health" || url === "/api/config") return;
+    // <img> tags can't send the passcode header, so image URLs carry a signature instead.
+    if (url.startsWith("/api/mealie-image/")) {
+      const id = url.slice("/api/mealie-image/".length);
+      const sig = String((req.query as { sig?: string } | undefined)?.sig ?? "");
+      if (safeEqual(sig, imageSig(config.appPasscode, id))) return;
+    }
     const given = String(req.headers["x-app-passcode"] ?? "");
     if (!safeEqual(given, config.appPasscode)) {
       return reply.code(401).send({ error: "Passcode required" });
@@ -157,6 +163,7 @@ export function buildApp(config: Config, overrides: Partial<{ service: Service; 
 
   app.post("/api/deck", async (req) => service.deck(deckSchema.parse(req.body)));
   app.post("/api/save", async (req) => service.save(saveSchema.parse(req.body)));
+  app.get("/api/recipes", async () => service.book());
   app.get("/api/week", async () => service.week());
   app.post("/api/plan/generate", async (req) => service.generate(generateSchema.parse(req.body ?? {})));
   app.post("/api/plan/apply", async (req) => service.apply(applySchema.parse(req.body)));
@@ -165,10 +172,16 @@ export function buildApp(config: Config, overrides: Partial<{ service: Service; 
   app.get<{ Params: { id: string } }>("/api/mealie-image/:id", async (req, reply) => {
     const id = req.params.id;
     if (!/^[0-9a-f-]{32,36}$/i.test(id)) return reply.code(400).send();
-    const res = await fetch(`${config.mealieUrl}/api/media/recipes/${id}/images/min-original.webp`, {
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (!res.ok) return reply.code(404).send();
+    // Prefer the smaller image; older imports may only have the original.
+    let res: Response | undefined;
+    for (const file of ["min-original.webp", "original.webp"]) {
+      res = await fetch(`${config.mealieUrl}/api/media/recipes/${id}/images/${file}`, {
+        headers: { Authorization: `Bearer ${config.mealieToken}` },
+        signal: AbortSignal.timeout(15_000),
+      }).catch(() => undefined);
+      if (res?.ok) break;
+    }
+    if (!res?.ok) return reply.code(404).send();
     reply.header("Content-Type", res.headers.get("content-type") ?? "image/webp");
     reply.header("Cache-Control", "public, max-age=86400");
     return reply.send(Buffer.from(await res.arrayBuffer()));

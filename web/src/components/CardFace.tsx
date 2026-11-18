@@ -1,3 +1,4 @@
+import { useState } from "preact/hooks";
 import type { Card } from "../api";
 import { IconClock, IconSparkle } from "../icons";
 
@@ -25,6 +26,15 @@ export function Placeholder({ title }: { title: string }) {
   );
 }
 
+/** Recipe photo that falls back to the gradient placeholder when missing or when it fails to load. */
+export function RecipeImage({ card, lazy = true }: { card: Pick<Card, "image" | "title">; lazy?: boolean }) {
+  const [failed, setFailed] = useState<string | undefined>();
+  if (!card.image || failed === card.image) return <Placeholder title={card.title} />;
+  return (
+    <img src={card.image} alt="" loading={lazy ? "lazy" : undefined} draggable={false} onError={() => setFailed(card.image)} />
+  );
+}
+
 export function OnHandBadge({ card }: { card: Card }) {
   if (!card.onHand || card.onHand.total === 0) return null;
   const n = card.onHand.missing.length;
@@ -39,7 +49,7 @@ export function CardFace({ card }: { card: Card }) {
   return (
     <div class="card-face">
       <div class="card-image">
-        {card.image ? <img src={card.image} alt="" loading="lazy" draggable={false} /> : <Placeholder title={card.title} />}
+        <RecipeImage card={card} />
         {card.source === "ai" && (
           <span class="ai-badge">
             <IconSparkle size={14} /> AI idea

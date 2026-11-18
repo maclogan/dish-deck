@@ -19,6 +19,8 @@ export interface MealieRecipeSummary {
   orgURL?: string | null;
   dateUpdated?: string | null;
   updatedAt?: string | null;
+  dateAdded?: string | null;
+  createdAt?: string | null;
 }
 
 export interface MealieIngredient {

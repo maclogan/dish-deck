@@ -80,6 +80,19 @@ export interface DeckRequest {
   exclude: string[];
 }
 
+/** A saved recipe in the recipe book grid, with filter matches worked out on the server. */
+export interface BookRecipe extends Card {
+  /** Which dietary, meal and nutrition filters this recipe passes. */
+  fits: { diets: DietId[]; meals: MealFilter[]; goals: GoalId[] };
+  rating?: number;
+  /** ISO date the recipe was added to Mealie, when known. */
+  addedAt?: string;
+}
+
+export interface BookResponse {
+  recipes: BookRecipe[];
+}
+
 export interface DeckResponse {
   cards: Card[];
   /** Short note about how the cards were produced, e.g. "AI ideas for 'cozy soup'". */
