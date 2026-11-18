@@ -153,7 +153,7 @@ describe("deck", () => {
     });
     const res = await service.deck({ source: "new", mood: "teriyaki", onHand: false, leniency: 2, count: 4, exclude: [] });
     expect(res.cards.map((c) => c.source)).toEqual(["mealdb"]);
-    expect(res.note).toMatch(/AI ideas aren't available/);
+    expect(res.note).toMatch(/Couldn't get AI ideas this time; showing TheMealDB results/);
     expect(warnings[0]).toMatch(/529 overloaded/);
   });
 
