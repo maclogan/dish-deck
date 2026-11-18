@@ -199,10 +199,10 @@ npm run typecheck
 
 ### Releases
 
-GitHub Actions runs the tests on every push. Container images publish to GHCR on pushes to `main` (`:main`) and on version tags:
+GitHub Actions runs the tests on every push. Container images publish to GHCR: every push to `main` updates `:latest` (and `:main`), and version tags publish fixed versions you can pin:
 
 ```bash
-git tag v0.2.0 && git push origin v0.2.0   # publishes :0.2.0, :0.2 and :latest
+git tag v0.2.0 && git push origin v0.2.0   # publishes :0.2.0 and :0.2
 ```
 
 On a private repo, the GHCR package is private too. Make it public in the package settings, or log in with `docker login ghcr.io` before pulling.
