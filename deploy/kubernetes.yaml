@@ -1,0 +1,73 @@
+# Dish Deck on Kubernetes (any distribution: MicroK8s, k3s, kubeadm, ...).
+#
+# All settings and secrets come from your .env file, stored as a Secret:
+#   kubectl create namespace dish-deck
+#   kubectl -n dish-deck create secret generic dish-deck-env --from-env-file=.env
+#   kubectl apply -f deploy/kubernetes.yaml
+#
+# To change settings later, recreate the secret and restart:
+#   kubectl -n dish-deck create secret generic dish-deck-env --from-env-file=.env --dry-run=client -o yaml | kubectl apply -f -
+#   kubectl -n dish-deck rollout restart deploy/dish-deck
+#
+# In .env, point MEALIE_URL at Mealie's in-cluster address, e.g.
+#   MEALIE_URL=http://mealie.mealie.svc.cluster.local:9000   (service "mealie" in namespace "mealie")
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dish-deck
+  namespace: dish-deck
+  labels:
+    app: dish-deck
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dish-deck
+  template:
+    metadata:
+      labels:
+        app: dish-deck
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: dish-deck
+          image: ghcr.io/maclogan/dish-deck:latest
+          # If you build the image yourself and import it into the cluster
+          # (e.g. `microk8s images import`), set image: dish-deck:local and imagePullPolicy: Never.
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - secretRef:
+                name: dish-deck-env
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet: { path: /api/health, port: http }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /api/health, port: http }
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          resources:
+            requests: { cpu: 25m, memory: 64Mi }
+            limits: { memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dish-deck
+  namespace: dish-deck
+spec:
+  selector:
+    app: dish-deck
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

@@ -1,0 +1,19 @@
+# Secrets: copy example.env to .env and keep it local
+.env
+.env.*
+!example.env
+*.env
+!example.env
+
+# Build output and dependencies
+node_modules/
+web/dist/
+server/dist/
+
+# Misc
+*.log
+*.tar
+.DS_Store
+
+# Fake values for local development only
+!dev/mock.env

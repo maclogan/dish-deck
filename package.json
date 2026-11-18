@@ -1,0 +1,40 @@
+{
+  "name": "dish-deck",
+  "version": "0.1.0",
+  "description": "Swipe-to-plan meal discovery PWA for Mealie: swipe recipe ideas, use what is on hand, and auto-plan the week.",
+  "scripts": {
+    "dev:server": "tsx watch server/src/index.ts",
+    "dev:web": "vite",
+    "build": "vite build && tsc -p server/tsconfig.json",
+    "start": "node server/dist/index.js",
+    "test": "vitest run",
+    "typecheck": "tsc -p server/tsconfig.json --noEmit && tsc -p web/tsconfig.json --noEmit",
+    "dev:mock": "tsx dev/mock-server.ts",
+    "dev:server:mock": "ENV_FILE=dev/mock.env tsx watch server/src/index.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.10.0",
+    "@fastify/static": "^8.3.0",
+    "fastify": "^5.12.8",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.10.6",
+    "@types/node": "^26.6.6",
+    "preact": "^11.2.0",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.1"
+  },
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/maclogan/dish-deck.git"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

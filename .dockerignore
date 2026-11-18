@@ -1,0 +1,13 @@
+# Never bake secrets into the image; they're injected at runtime.
+.env
+.env.*
+*.env
+!example.env
+
+node_modules
+web/dist
+server/dist
+.git
+.github
+*.log
+*.tar

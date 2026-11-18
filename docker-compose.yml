@@ -1,0 +1,16 @@
+# Dish Deck with Docker Compose.
+#   cp example.env .env   # then fill it in
+#   docker compose up -d
+#
+# If Mealie runs in another Compose project, put both on a shared network (see README)
+# or set MEALIE_URL in .env to an address the container can reach.
+services:
+  dish-deck:
+    image: ghcr.io/maclogan/dish-deck:latest
+    # To build from source instead of pulling the published image:
+    # build: .
+    container_name: dish-deck
+    env_file: .env
+    ports:
+      - "8080:8080"
+    restart: unless-stopped

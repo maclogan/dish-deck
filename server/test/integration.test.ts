@@ -1,0 +1,243 @@
+import { describe, expect, it } from "vitest";
+import { buildApp } from "../src/app.js";
+import type { Config } from "../src/config.js";
+import { MealieClient, type MealiePlanEntry, type MealieRecipe } from "../src/mealie.js";
+import { Service } from "../src/service.js";
+import { MealDb } from "../src/sources/mealdb.js";
+import { mealieRecipe, teriyakiMeal } from "./fixtures.js";
+
+const config: Config = {
+  port: 0,
+  host: "127.0.0.1",
+  mealieUrl: "http://mealie.test",
+  mealiePublicUrl: "https://meals.example.com",
+  mealieToken: "tok",
+  anthropicModel: "claude-haiku-5-5",
+  householdContext: "a busy family",
+  mealdbKey: "1",
+  mealdbBaseUrl: "https://www.themealdb.com",
+  timezone: "America/Denver",
+  busyDays: [2, 4],
+  planStart: "today",
+  leftovers: true,
+  staples: ["salt", "water", "oil"],
+  webDir: "/nonexistent",
+};
+
+function json(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+}
+
+/** In-memory stand-in for the Mealie API. */
+function fakeMealie() {
+  const recipes: MealieRecipe[] = [
+    mealieRecipe({ name: "Chicken Tikka Masala", ingredients: ["2 lb chicken thighs", "1 cup yogurt"], recipeServings: 6, tags: [{ name: "Indian" }] }),
+    mealieRecipe({ name: "Beef Tacos", ingredients: ["1 lb ground beef", "8 tortillas"], totalTimeSeconds: 1500 }),
+    mealieRecipe({ name: "Greek Salad", ingredients: ["cucumber", "feta"], recipeCategory: [{ name: "Lunch" }], recipeServings: 2, totalTimeSeconds: 600 }),
+    mealieRecipe({ name: "Salmon Sheet Pan", ingredients: ["4 salmon fillets"], recipeServings: 2, totalTimeSeconds: 1500 }),
+    mealieRecipe({ name: "Lentil Curry", ingredients: ["1 cup red lentils"], recipeServings: 4 }),
+  ];
+  const plans: MealiePlanEntry[] = [];
+  const calls: { method: string; path: string; query: URLSearchParams; body?: any }[] = [];
+  let nextId = 1;
+
+  const fetchImpl = (async (input: URL | RequestInfo, init?: RequestInit) => {
+    const url = new URL(String(input));
+    const method = init?.method ?? "GET";
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    const path = url.pathname;
+    calls.push({ method, path, query: url.searchParams, body });
+    expect((init?.headers as Record<string, string>).Authorization).toBe("Bearer tok");
+
+    if (path === "/api/users/self") return json({ id: "u1", groupSlug: "home", householdSlug: "family" });
+    if (path === "/api/recipes" && method === "GET") return json({ items: recipes });
+    if (path === "/api/recipes/suggestions") {
+      return json({ items: recipes.slice(0, 2).map((r) => ({ recipe: r, missingFoods: [{ id: "f9", name: "yogurt" }] })) });
+    }
+    if (path === "/api/recipes/create/html-or-json") {
+      const schema = JSON.parse(body.data);
+      const r = mealieRecipe({ name: schema.name, ingredients: schema.recipeIngredient });
+      recipes.push(r);
+      return json(r.slug, 201);
+    }
+    const slugMatch = /^\/api\/recipes\/([^/]+)(\/image)?$/.exec(path);
+    if (slugMatch) {
+      if (slugMatch[2]) return json({ image: "x" });
+      const r = recipes.find((x) => x.slug === slugMatch[1] || x.id === slugMatch[1]);
+      return r ? json(r) : json({ detail: "not found" }, 404);
+    }
+    if (path === "/api/foods") {
+      return json({
+        items: [
+          { id: "f1", name: "chicken thigh", aliases: [{ name: "chicken thighs" }], householdsWithIngredientFood: ["family"] },
+          { id: "f2", name: "soy sauce", householdsWithIngredientFood: ["family"] },
+          { id: "f3", name: "brown rice", householdsWithIngredientFood: ["family"] },
+          { id: "f4", name: "lobster", householdsWithIngredientFood: [] },
+        ],
+      });
+    }
+    if (path === "/api/households/mealplans" && method === "GET") {
+      const s = url.searchParams.get("start_date")!;
+      const e = url.searchParams.get("end_date")!;
+      return json({ items: plans.filter((p) => p.date >= s && p.date <= e) });
+    }
+    if (path === "/api/households/mealplans" && method === "POST") {
+      const p = { id: nextId++, ...body };
+      plans.push(p);
+      return json(p, 201);
+    }
+    const del = /^\/api\/households\/mealplans\/(\d+)$/.exec(path);
+    if (del && method === "DELETE") {
+      const i = plans.findIndex((p) => p.id === Number(del[1]));
+      const [removed] = plans.splice(i, 1);
+      return json(removed);
+    }
+    return json({ detail: `unhandled ${method} ${path}` }, 500);
+  }) as typeof fetch;
+
+  return { recipes, plans, calls, fetchImpl };
+}
+
+function fakeMealDb() {
+  const fetchImpl = (async (input: URL | RequestInfo) => {
+    const url = new URL(String(input));
+    const file = url.pathname.split("/").pop();
+    if (file === "random.php" || file === "lookup.php" || file === "search.php") return json({ meals: [teriyakiMeal] });
+    if (file === "filter.php") return json({ meals: [{ idMeal: teriyakiMeal.idMeal, strMeal: teriyakiMeal.strMeal }] });
+    if (file === "list.php") {
+      return url.searchParams.has("a")
+        ? json({ meals: [{ strArea: "Japanese" }, { strArea: "Italian" }] })
+        : json({ meals: [{ strCategory: "Chicken" }, { strCategory: "Dessert" }] });
+    }
+    return json({ meals: null });
+  }) as typeof fetch;
+  return new MealDb("1", fetchImpl);
+}
+
+function setup() {
+  const m = fakeMealie();
+  const service = new Service({
+    config,
+    mealie: new MealieClient(config.mealieUrl, config.mealieToken, m.fetchImpl),
+    mealdb: fakeMealDb(),
+    now: () => new Date("2026-11-18T18:00:00Z"), // Wednesday in Denver
+  });
+  return { ...m, service };
+}
+
+describe("deck", () => {
+  it("deals new ideas from TheMealDB with on-hand info", async () => {
+    const { service } = setup();
+    const res = await service.deck({ source: "new", onHand: true, leniency: 8, count: 4, exclude: [], cuisine: "Japanese" });
+    expect(res.cards).toHaveLength(1);
+    const card = res.cards[0]!;
+    expect(card.title).toBe("Teriyaki Chicken Casserole");
+    // water is a staple; soy sauce and brown rice are on hand; chicken breasts are not (only thighs).
+    expect(card.onHand?.have).toBe(2);
+    expect(card.onHand?.missing).toContain("chicken breasts");
+    expect(card.onHand?.missing).not.toContain("water");
+  });
+
+  it("skips cards already shown or already in the recipe book", async () => {
+    const { service } = setup();
+    const res = await service.deck({ source: "new", onHand: false, leniency: 2, count: 4, exclude: ["mealdb:52772"] });
+    expect(res.cards).toHaveLength(0);
+  });
+
+  it("uses Mealie's recipe finder with the on-hand food ids for saved recipes", async () => {
+    const { service, calls } = setup();
+    const res = await service.deck({ source: "saved", onHand: true, leniency: 2, count: 5, exclude: [] });
+    const q = calls.find((c) => c.path === "/api/recipes/suggestions")!.query;
+    expect(q.getAll("foods").sort()).toEqual(["f1", "f2", "f3"]);
+    expect(q.get("maxMissingFoods")).toBe("2");
+    expect(res.cards).toHaveLength(2);
+    expect(res.cards[0]!.onHand?.missing).toEqual(["yogurt"]);
+    expect(res.cards[0]!.mealie?.url).toMatch(/^https:\/\/meals\.example\.com\/g\/home\/r\//);
+  });
+
+  it("filters saved recipes by mood text", async () => {
+    const { service } = setup();
+    const res = await service.deck({ source: "saved", onHand: false, leniency: 2, count: 5, exclude: [], mood: "indian" });
+    expect(res.cards.map((c) => c.title)).toEqual(["Chicken Tikka Masala"]);
+  });
+});
+
+describe("save", () => {
+  it("creates the recipe in Mealie and adds it to the meal plan", async () => {
+    const { service, calls, plans } = setup();
+    const deck = await service.deck({ source: "new", onHand: false, leniency: 2, count: 1, exclude: [] });
+    const res = await service.save({ card: deck.cards[0]!, target: "plan", plan: { date: "2026-11-20", entryType: "dinner" } });
+    expect(res.alreadyInBook).toBe(false);
+    const create = calls.find((c) => c.path === "/api/recipes/create/html-or-json")!;
+    expect(create.body.includeTags).toBe(true);
+    expect(JSON.parse(create.body.data).name).toBe("Teriyaki Chicken Casserole");
+    expect(plans).toHaveLength(1);
+    expect(plans[0]).toMatchObject({ date: "2026-11-20", entryType: "dinner" });
+    expect(res.recipeUrl).toContain("/g/home/r/");
+
+    // Saving the same dish again reuses the existing recipe.
+    const again = await service.save({ card: deck.cards[0]!, target: "book" });
+    expect(again.alreadyInBook).toBe(true);
+    expect(calls.filter((c) => c.path === "/api/recipes/create/html-or-json")).toHaveLength(1);
+  });
+});
+
+describe("week planning", () => {
+  it("generates a week, keeps existing entries, and applies only new ones", async () => {
+    const { service, plans, recipes } = setup();
+    plans.push({ id: 100, date: "2026-11-19", entryType: "dinner", recipeId: recipes[1]!.id, title: "" });
+
+    const preview = await service.generate({ replaceExisting: false });
+    expect(preview.days).toHaveLength(7);
+    expect(preview.days[0]!.date).toBe("2026-11-18");
+    expect(preview.days[1]!.dinner.kind).toBe("existing");
+    expect(preview.days[1]!.busy).toBe(true); // Thursday
+
+    const res = await service.apply({ days: preview.days, replaceExisting: false });
+    expect(res.removed).toBe(0);
+    const newSlots = preview.days.flatMap((d) => [d.lunch, d.dinner]).filter((p) => p.kind === "recipe" || p.kind === "leftovers");
+    expect(res.created).toBe(newSlots.length);
+    expect(plans.filter((p) => p.date === "2026-11-19" && p.entryType === "dinner")).toHaveLength(1);
+    const leftovers = plans.filter((p) => p.title?.startsWith("Leftovers:"));
+    expect(leftovers.every((p) => !p.recipeId)).toBe(true);
+
+    const week = await service.week();
+    expect(week.days.every((d) => d.dinner.kind === "existing")).toBe(true);
+  });
+
+  it("doesn't double-book a slot that was filled after the preview", async () => {
+    const { service, plans, recipes } = setup();
+    const preview = await service.generate({ replaceExisting: false });
+    const target = preview.days.find((d) => d.dinner.kind === "recipe")!;
+    plans.push({ id: 200, date: target.date, entryType: "dinner", recipeId: recipes[4]!.id, title: "" });
+    const res = await service.apply({ days: preview.days, replaceExisting: false });
+    expect(res.skipped).toBe(1);
+    expect(plans.filter((p) => p.date === target.date && p.entryType === "dinner")).toHaveLength(1);
+  });
+
+  it("replaces existing entries when asked", async () => {
+    const { service, plans, recipes } = setup();
+    plans.push({ id: 100, date: "2026-11-19", entryType: "dinner", recipeId: recipes[1]!.id, title: "" });
+    const preview = await service.generate({ replaceExisting: true });
+    const res = await service.apply({ days: preview.days, replaceExisting: true });
+    expect(res.removed).toBe(1);
+    expect(plans.some((p) => p.id === 100)).toBe(false);
+  });
+});
+
+describe("HTTP API", () => {
+  it("validates requests and enforces the passcode", async () => {
+    const { service } = setup();
+    const app = buildApp({ ...config, appPasscode: "secret" }, { service });
+    const health = await app.inject({ method: "GET", url: "/api/health" });
+    expect(health.statusCode).toBe(200);
+    const noPass = await app.inject({ method: "GET", url: "/api/week" });
+    expect(noPass.statusCode).toBe(401);
+    const ok = await app.inject({ method: "GET", url: "/api/week", headers: { "x-app-passcode": "secret" } });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json().days).toHaveLength(7);
+    const bad = await app.inject({ method: "POST", url: "/api/deck", headers: { "x-app-passcode": "secret" }, payload: { source: "nope" } });
+    expect(bad.statusCode).toBe(400);
+    await app.close();
+  });
+});
