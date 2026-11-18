@@ -10,6 +10,17 @@ import {
   type MealieRecipeSummary,
   type MealieUser,
 } from "./mealie.js";
+import {
+  dietLabel,
+  fitsDiet,
+  fitsGoals,
+  fitsMeal,
+  goalLabel,
+  mealDbCategoriesForMeal,
+  mealDbCategoryForDiet,
+  mealLabel,
+  parseNutrient,
+} from "./filters.js";
 import { classifyRecipe, planWeek, slotKey, type ExistingSlot } from "./planner.js";
 import type { AiRecipes } from "./sources/ai.js";
 import { mealDbToCard, type MealDb } from "./sources/mealdb.js";
@@ -20,6 +31,7 @@ import type {
   DeckResponse,
   GenerateRequest,
   MealType,
+  Nutrition,
   PlanDay,
   SaveRequest,
   SaveResponse,
@@ -111,6 +123,8 @@ export class Service {
 
   private async savedDeck(req: DeckRequest): Promise<DeckResponse> {
     const seen = new Set(req.exclude);
+    const dietary = req.dietary ?? [];
+    const goals = req.goals ?? [];
     const moodWords = normalize(req.mood ?? "").split(" ").filter((w) => w.length > 2);
     let summaries: { recipe: MealieRecipeSummary; missing?: string[] }[];
     let note: string;
@@ -128,6 +142,7 @@ export class Service {
       summaries = items.map((recipe) => ({ recipe }));
       note = "From our recipe book";
     }
+    note += filterSuffix(req);
 
     const matches = (r: MealieRecipeSummary) => {
       if (!moodWords.length && !req.cuisine && !req.category) return true;
@@ -136,13 +151,21 @@ export class Service {
       return wanted.some((w) => hay.includes(w));
     };
 
-    const picked = summaries.filter((s) => !seen.has(`mealie:${s.recipe.id}`) && matches(s.recipe)).slice(0, req.count);
-    const cards = await mapLimit(picked, 4, async ({ recipe, missing }) => {
-      const full = await this.mealie.getRecipe(recipe.slug);
-      const ingredients = (full.recipeIngredient ?? []).map(ingredientText).filter(Boolean);
-      return this.cardFromMealie(full, ingredients, missing);
-    });
-    return { cards, note: cards.length ? note : `${note}: nothing matched` };
+    const pool = summaries.filter((s) => !seen.has(`mealie:${s.recipe.id}`) && matches(s.recipe));
+    const strict = dietary.length > 0 || goals.length > 0 || !!req.meal;
+    // Dietary, meal and nutrition checks need the full recipe, so fetch in small batches until the deck is full.
+    const limit = Math.min(pool.length, strict ? 40 : req.count);
+    const cards: Card[] = [];
+    for (let i = 0; i < limit && cards.length < req.count; i += 4) {
+      const batch = await mapLimit(pool.slice(i, Math.min(i + 4, limit)), 4, async ({ recipe, missing }) => {
+        const full = await this.mealie.getRecipe(recipe.slug);
+        const ingredients = (full.recipeIngredient ?? []).map(ingredientText).filter(Boolean);
+        return this.cardFromMealie(full, ingredients, missing);
+      });
+      cards.push(...batch.filter((c) => fitsDiet(c.ingredients, dietary) && fitsMeal(c, req.meal) && fitsGoals(c, goals)));
+    }
+    const out = cards.slice(0, req.count);
+    return { cards: out, note: out.length ? note : `${note}: nothing matched` };
   }
 
   private async cardFromMealie(r: MealieRecipe, ingredients: string[], missing?: string[]): Promise<Card> {
@@ -158,6 +181,7 @@ export class Service {
       servings: r.recipeServings || undefined,
       ingredients,
       instructions: (r.recipeInstructions ?? []).map((s) => s.text ?? "").filter(Boolean),
+      nutrition: mealieNutrition(r),
       onHand: missing ? { have: Math.max(ingredients.length - missing.length, 0), total: ingredients.length, missing } : undefined,
       mealie: { id: r.id, slug: r.slug, url: await this.recipeLink(r.slug) },
     };
@@ -168,7 +192,11 @@ export class Service {
     const book = await this.recipeSummaries().catch(() => [] as MealieRecipeSummary[]);
     const bookNames = new Set(book.map((r) => normalize(r.name)));
     const onHand = req.onHand ? await this.onHandFoods() : undefined;
-    const useAi = !!this.deps.ai && req.ai !== false && !!req.mood?.trim();
+    const dietary = req.dietary ?? [];
+    const goals = req.goals ?? [];
+    const mood = req.mood?.trim();
+    // Nutrition goals can only be checked with AI estimates, so they also trigger AI ideas.
+    const useAi = !!this.deps.ai && req.ai !== false && (!!mood || goals.length > 0);
 
     let cards: Card[] | undefined;
     let note = "";
@@ -177,9 +205,12 @@ export class Service {
     if (useAi) {
       try {
         const generated = await this.deps.ai!.generate({
-          mood: req.mood?.trim(),
+          mood,
           cuisine: req.cuisine,
           category: req.category,
+          dietary,
+          meal: req.meal,
+          goals,
           count: Math.max(req.count, 6),
           onHand: onHand?.matcher.names,
           leniency: req.leniency,
@@ -187,8 +218,11 @@ export class Service {
           bookSample: book.map((r) => r.name),
         });
         if (!generated.length) throw new Error("AI returned no recipes");
-        cards = generated;
-        note = `AI ideas for "${req.mood!.trim()}"`;
+        // Double-check the model's work: drop anything that breaks a restriction or misses a goal.
+        const fit = generated.filter((c) => fitsDiet(c.ingredients, dietary) && fitsGoals(c, goals));
+        if (!fit.length) throw new Error("none of the AI recipes met the filters");
+        cards = fit;
+        note = (mood ? `AI ideas for "${mood}"` : "AI ideas") + filterSuffix(req);
       } catch (err) {
         // Any Anthropic/API/parse failure: fall back to TheMealDB rather than failing the deal.
         aiFailed = true;
@@ -197,17 +231,26 @@ export class Service {
     }
 
     if (!cards) {
-      const want = req.onHand ? req.count * 3 : req.count * 2;
+      const strict = dietary.length > 0 || !!req.meal;
+      const want = Math.min(req.count * (req.onHand ? 3 : 2) * (strict ? 2 : 1), 48);
+      const mealCats = req.meal ? mealDbCategoriesForMeal(req.meal) : [];
+      const dietCat = mealDbCategoryForDiet(dietary);
       const found = await this.deps.mealdb.candidates({
         cuisine: req.cuisine,
         category: req.category,
+        categories: mealCats.length ? mealCats : dietCat ? [dietCat] : undefined,
         mood: req.mood,
         want,
       });
-      note = aiFailed ? `AI ideas aren't available right now; showing TheMealDB results. ${found.note}`.trim() : found.note;
+      note = found.note + filterSuffix({ ...req, goals: [] });
+      if (goals.length) note += ` (nutrition goals need AI ideas, so they weren't applied)`;
+      if (aiFailed) note = `Couldn't get AI ideas this time; showing TheMealDB results. ${note}`.trim();
       const refs = found.refs.filter((r) => !seen.has(`mealdb:${r.id}`)).slice(0, want);
       const meals = await mapLimit(refs, 4, async (r) => r.meal ?? (await this.deps.mealdb.lookup(r.id)));
-      cards = meals.filter((m) => !!m).map((m) => mealDbToCard(m!));
+      cards = meals
+        .filter((m) => !!m)
+        .map((m) => mealDbToCard(m!))
+        .filter((c) => fitsDiet(c.ingredients, dietary) && fitsMeal(c, req.meal));
     }
 
     cards = cards.filter((c) => !seen.has(c.key) && !bookNames.has(normalize(c.title)));
@@ -353,6 +396,31 @@ export class Service {
 }
 
 /** Build a schema.org Recipe object for Mealie's JSON importer. */
+/** " · Dinner · Vegan · High protein" for the deck note, or "" when no extra filters are on. */
+export function filterSuffix(req: Pick<DeckRequest, "meal" | "dietary" | "goals">): string {
+  const parts = [
+    ...(req.meal ? [mealLabel(req.meal)] : []),
+    ...(req.dietary ?? []).map(dietLabel),
+    ...(req.goals ?? []).map(goalLabel),
+  ];
+  return parts.length ? ` · ${parts.join(" · ")}` : "";
+}
+
+/** Mealie stores nutrition as free text ("350 kcal", "25 g"); pull out the numbers we filter on. */
+export function mealieNutrition(r: MealieRecipe): Nutrition | undefined {
+  const n = r.nutrition;
+  if (!n) return undefined;
+  const out: Nutrition = {
+    calories: parseNutrient(n.calories),
+    protein: parseNutrient(n.proteinContent),
+    carbs: parseNutrient(n.carbohydrateContent),
+    fat: parseNutrient(n.fatContent),
+    fiber: parseNutrient(n.fiberContent),
+  };
+  for (const k of Object.keys(out) as (keyof Nutrition)[]) if (out[k] === undefined) delete out[k];
+  return Object.keys(out).length ? out : undefined;
+}
+
 export function toSchemaOrg(card: Card): Record<string, unknown> {
   const keywords = [...card.tags, card.cuisine, "new to try"].filter(Boolean);
   // An explicit empty "suits" means not a lunch/dinner dish (e.g. dessert): keep its own category.
@@ -373,6 +441,16 @@ export function toSchemaOrg(card: Card): Record<string, unknown> {
     keywords: keywords.join(", "),
     recipeIngredient: card.ingredients,
     recipeInstructions: card.instructions.map((text) => ({ "@type": "HowToStep", text })),
+    nutrition: card.nutrition
+      ? {
+          "@type": "NutritionInformation",
+          calories: card.nutrition.calories !== undefined ? `${card.nutrition.calories} kcal` : undefined,
+          proteinContent: card.nutrition.protein !== undefined ? `${card.nutrition.protein} g` : undefined,
+          carbohydrateContent: card.nutrition.carbs !== undefined ? `${card.nutrition.carbs} g` : undefined,
+          fatContent: card.nutrition.fat !== undefined ? `${card.nutrition.fat} g` : undefined,
+          fiberContent: card.nutrition.fiber !== undefined ? `${card.nutrition.fiber} g` : undefined,
+        }
+      : undefined,
     url: card.sourceUrl,
   };
 }

@@ -7,6 +7,7 @@ import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { Config } from "./config.js";
+import { DIETS, DIET_IDS, GOALS, GOAL_IDS, MEALS, MEAL_IDS } from "./filters.js";
 import { MealieClient, MealieError } from "./mealie.js";
 import { Service } from "./service.js";
 import { AiRecipes } from "./sources/ai.js";
@@ -30,6 +31,15 @@ const cardSchema = z.object({
   ingredients: z.array(z.string().max(300)).max(80),
   instructions: z.array(z.string().max(3000)).max(60),
   sourceUrl: z.string().max(2000).optional(),
+  nutrition: z
+    .object({
+      calories: z.number().optional(),
+      protein: z.number().optional(),
+      carbs: z.number().optional(),
+      fat: z.number().optional(),
+      fiber: z.number().optional(),
+    })
+    .optional(),
   suits: z.array(mealType).optional(),
   onHand: z.object({ have: z.number(), total: z.number(), missing: z.array(z.string()) }).optional(),
   mealie: z.object({ id: z.string(), slug: z.string(), url: z.string().optional() }).optional(),
@@ -41,6 +51,9 @@ const deckSchema = z.object({
   ai: z.boolean().default(true),
   cuisine: z.string().max(60).optional(),
   category: z.string().max(60).optional(),
+  dietary: z.array(z.enum(DIET_IDS)).max(DIET_IDS.length).default([]),
+  meal: z.enum(MEAL_IDS).optional(),
+  goals: z.array(z.enum(GOAL_IDS)).max(GOAL_IDS.length).default([]),
   onHand: z.boolean().default(false),
   leniency: z.number().int().min(0).max(10).default(2),
   count: z.number().int().min(1).max(12).default(8),
@@ -136,6 +149,9 @@ export function buildApp(config: Config, overrides: Partial<{ service: Service; 
       mealieUrl: config.mealiePublicUrl,
       cuisines: cuisines.filter((c) => c !== "Unknown"),
       categories,
+      dietary: DIETS,
+      meals: MEALS,
+      goals: GOALS,
     };
   });
 

@@ -157,6 +157,34 @@ describe("deck", () => {
     expect(warnings[0]).toMatch(/529 overloaded/);
   });
 
+  it("drops TheMealDB dishes that break a dietary restriction", async () => {
+    const { service } = setup();
+    const res = await service.deck({ source: "new", onHand: false, leniency: 2, count: 4, exclude: [], dietary: ["vegetarian"] });
+    expect(res.cards).toHaveLength(0); // the only fake meal is a chicken casserole
+    expect(res.note).toContain("Vegetarian");
+  });
+
+  it("uses AI for nutrition goals and drops AI ideas that miss them", async () => {
+    const m = fakeMealie();
+    const base = { source: "ai" as const, tags: [], ingredients: ["2 chicken breasts", "1 cup broccoli"], instructions: ["Cook."] };
+    const ai = {
+      generate: async () => [
+        { ...base, key: "ai:lean", title: "Lean Chicken Bowl", nutrition: { calories: 450, protein: 42, carbs: 20, fat: 10, fiber: 6 } },
+        { ...base, key: "ai:light", title: "Light Salad", nutrition: { calories: 250, protein: 8, carbs: 15, fat: 9, fiber: 7 } },
+      ],
+    } as unknown as AiRecipes;
+    const service = new Service({
+      config,
+      mealie: new MealieClient(config.mealieUrl, config.mealieToken, m.fetchImpl),
+      mealdb: fakeMealDb(),
+      ai,
+      now: () => new Date("2026-11-18T18:00:00Z"),
+    });
+    const res = await service.deck({ source: "new", onHand: false, leniency: 2, count: 4, exclude: [], goals: ["high-protein"] });
+    expect(res.cards.map((c) => c.title)).toEqual(["Lean Chicken Bowl"]);
+    expect(res.note).toBe("AI ideas · High protein");
+  });
+
   it("skips cards already shown or already in the recipe book", async () => {
     const { service } = setup();
     const res = await service.deck({ source: "new", onHand: false, leniency: 2, count: 4, exclude: ["mealdb:52772"] });

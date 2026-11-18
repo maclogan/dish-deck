@@ -34,6 +34,14 @@ export interface MealieIngredient {
 export interface MealieRecipe extends MealieRecipeSummary {
   recipeIngredient?: MealieIngredient[];
   recipeInstructions?: { text?: string | null; title?: string | null }[];
+  /** Per-serving nutrition as free text, e.g. { calories: "350", proteinContent: "25 g" }. */
+  nutrition?: {
+    calories?: string | null;
+    proteinContent?: string | null;
+    carbohydrateContent?: string | null;
+    fatContent?: string | null;
+    fiberContent?: string | null;
+  } | null;
 }
 
 export interface MealieFood {

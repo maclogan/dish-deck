@@ -1,13 +1,17 @@
 // AI recipe ideas via the Claude API (Messages API with a forced tool call for structured output).
 
 import Anthropic from "@anthropic-ai/sdk";
-import type { Card, MealType } from "../types.js";
+import { dietLabel, goalPrompt, mealLabel } from "../filters.js";
+import type { Card, DietId, GoalId, MealFilter, MealType, Nutrition } from "../types.js";
 import { slugify } from "../util.js";
 
 export interface AiRequest {
   mood?: string;
   cuisine?: string;
   category?: string;
+  dietary?: DietId[];
+  meal?: MealFilter;
+  goals?: GoalId[];
   count: number;
   /** On-hand food names to build around, when the user asked for that. */
   onHand?: string[];
@@ -30,6 +34,19 @@ interface AiRecipe {
   ingredients: string[];
   instructions: string[];
   tags?: string[];
+  nutrition?: Nutrition;
+}
+
+const NUTRIENTS = ["calories", "protein", "carbs", "fat", "fiber"] as const;
+
+function cleanNutrition(n: Nutrition | undefined): Nutrition | undefined {
+  if (!n || typeof n !== "object") return undefined;
+  const out: Nutrition = {};
+  for (const k of NUTRIENTS) {
+    const v = Number(n[k]);
+    if (Number.isFinite(v) && v >= 0) out[k] = Math.round(v);
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 const TOOL: Anthropic.Tool = {
@@ -58,8 +75,20 @@ const TOOL: Anthropic.Tool = {
             },
             instructions: { type: "array", items: { type: "string" }, description: "Clear steps, one per item." },
             tags: { type: "array", items: { type: "string" }, description: "2-4 short tags, e.g. 'weeknight', 'spicy'." },
+            nutrition: {
+              type: "object",
+              description: "Your best estimate of nutrition per serving.",
+              properties: {
+                calories: { type: "number", description: "kcal" },
+                protein: { type: "number", description: "grams" },
+                carbs: { type: "number", description: "grams of net carbs" },
+                fat: { type: "number", description: "grams" },
+                fiber: { type: "number", description: "grams" },
+              },
+              required: ["calories", "protein", "carbs", "fat", "fiber"],
+            },
           },
-          required: ["title", "description", "suits", "servings", "ingredients", "instructions"],
+          required: ["title", "description", "suits", "servings", "ingredients", "instructions", "nutrition"],
         },
       },
     },
@@ -75,11 +104,17 @@ export class AiRecipes {
   }
 
   async generate(req: AiRequest): Promise<Card[]> {
+    const mainMeal = !req.meal || req.meal === "lunch" || req.meal === "dinner";
+    const forWhat = !req.meal ? "lunch or dinner" : req.meal === "snack" ? "a snack or appetizer" : mealLabel(req.meal).toLowerCase();
     const lines = [
-      `Suggest ${req.count} distinct recipes ${this.household} would enjoy for lunch or dinner.`,
+      `Suggest ${req.count} distinct recipes ${this.household} would enjoy for ${forWhat}.`,
       req.mood ? `They're in the mood for: "${req.mood}".` : "",
       req.cuisine ? `Cuisine: ${req.cuisine}.` : "",
       req.category ? `Type of dish: ${req.category}.` : "",
+      req.dietary?.length
+        ? `Every recipe MUST be ${req.dietary.map(dietLabel).join(", ")}. Check every ingredient, including sauces, stocks and garnishes.`
+        : "",
+      req.goals?.length ? `Every recipe should be ${req.goals.map(goalPrompt).join(", and ")}. Keep the nutrition estimates honest.` : "",
       req.onHand?.length
         ? `Build around ingredients they already have on hand: ${req.onHand.slice(0, 80).join(", ")}. ` +
           `Each recipe should need at most ${req.leniency} ingredients they don't have (not counting salt, pepper, oil, water).`
@@ -112,13 +147,15 @@ export class AiRecipes {
         title: r.title,
         description: r.description,
         cuisine: r.cuisine,
-        category: r.category,
         tags: r.tags ?? [],
         totalMinutes: total || undefined,
         servings: r.servings || undefined,
         ingredients: r.ingredients,
         instructions: r.instructions,
-        suits: (r.suits ?? []).filter((s): s is MealType => s === "lunch" || s === "dinner"),
+        nutrition: cleanNutrition(r.nutrition),
+        // Breakfast, dessert and snacks aren't lunch/dinner plan dishes; keep their own category.
+        suits: mainMeal ? (r.suits ?? []).filter((s): s is MealType => s === "lunch" || s === "dinner") : [],
+        category: mainMeal ? r.category : mealLabel(req.meal!),
       };
     });
   }

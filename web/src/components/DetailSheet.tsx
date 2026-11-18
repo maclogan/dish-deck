@@ -25,6 +25,20 @@ export function DetailSheet(props: { card: Card | null; onClose: () => void; onA
             <OnHandBadge card={card} />
           </div>
           {card.description && <p>{card.description}</p>}
+          {card.nutrition && (
+            <p class="nutrition">
+              {[
+                card.nutrition.calories !== undefined && `${card.nutrition.calories} kcal`,
+                card.nutrition.protein !== undefined && `${card.nutrition.protein}g protein`,
+                card.nutrition.carbs !== undefined && `${card.nutrition.carbs}g carbs`,
+                card.nutrition.fat !== undefined && `${card.nutrition.fat}g fat`,
+                card.nutrition.fiber !== undefined && `${card.nutrition.fiber}g fiber`,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+              <span> per serving{card.source === "ai" ? " (estimated)" : ""}</span>
+            </p>
+          )}
 
           <h4>Ingredients</h4>
           <ul class="ingredients">
