@@ -65,12 +65,21 @@ export interface DeckRequest {
   mood?: string;
   /** Allow AI ideas for a mood search (when AI is configured). Defaults to true; false forces TheMealDB. */
   ai?: boolean;
+  /** Any of these cuisines. */
+  cuisines?: string[];
+  /** Any of these dish types (TheMealDB categories). */
+  categories?: string[];
+  /** Any of these meals. */
+  meals?: MealFilter[];
+  /** @deprecated Single-value forms, still accepted and merged into the lists above. */
   cuisine?: string;
+  /** @deprecated See `categories`. */
   category?: string;
-  /** Restrictions every card must satisfy (checked against ingredients). */
-  dietary?: DietId[];
+  /** @deprecated See `meals`. */
   meal?: MealFilter;
-  /** Nutrition goals. New ideas need AI for these; saved recipes use Mealie nutrition or tags. */
+  /** Restrictions every card must satisfy, all of them (checked against ingredients). */
+  dietary?: DietId[];
+  /** Nutrition goals; a card needs to meet any one. New ideas need AI for these; saved recipes use Mealie nutrition or tags. */
   goals?: GoalId[];
   onHand: boolean;
   /** Max missing ingredients allowed when onHand is true. */
