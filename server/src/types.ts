@@ -30,6 +30,8 @@ export interface Card {
 export interface DeckRequest {
   source: "new" | "saved";
   mood?: string;
+  /** Allow AI ideas for a mood search (when AI is configured). Defaults to true; false forces TheMealDB. */
+  ai?: boolean;
   cuisine?: string;
   category?: string;
   onHand: boolean;

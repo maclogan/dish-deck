@@ -33,6 +33,8 @@ export interface Deps {
   mealdb: MealDb;
   ai?: AiRecipes;
   now?: () => Date;
+  /** Reports recoverable problems (e.g. an AI failure we fell back from). */
+  warn?: (message: string) => void;
 }
 
 export class Service {
@@ -166,24 +168,35 @@ export class Service {
     const book = await this.recipeSummaries().catch(() => [] as MealieRecipeSummary[]);
     const bookNames = new Set(book.map((r) => normalize(r.name)));
     const onHand = req.onHand ? await this.onHandFoods() : undefined;
-    const useAi = !!this.deps.ai && !!req.mood?.trim();
+    const useAi = !!this.deps.ai && req.ai !== false && !!req.mood?.trim();
 
-    let cards: Card[];
-    let note: string;
+    let cards: Card[] | undefined;
+    let note = "";
+    let aiFailed = false;
 
     if (useAi) {
-      cards = await this.deps.ai!.generate({
-        mood: req.mood?.trim(),
-        cuisine: req.cuisine,
-        category: req.category,
-        count: Math.max(req.count, 6),
-        onHand: onHand?.matcher.names,
-        leniency: req.leniency,
-        avoid: [...book.map((r) => r.name)],
-        bookSample: book.map((r) => r.name),
-      });
-      note = `AI ideas for "${req.mood!.trim()}"`;
-    } else {
+      try {
+        const generated = await this.deps.ai!.generate({
+          mood: req.mood?.trim(),
+          cuisine: req.cuisine,
+          category: req.category,
+          count: Math.max(req.count, 6),
+          onHand: onHand?.matcher.names,
+          leniency: req.leniency,
+          avoid: [...book.map((r) => r.name)],
+          bookSample: book.map((r) => r.name),
+        });
+        if (!generated.length) throw new Error("AI returned no recipes");
+        cards = generated;
+        note = `AI ideas for "${req.mood!.trim()}"`;
+      } catch (err) {
+        // Any Anthropic/API/parse failure: fall back to TheMealDB rather than failing the deal.
+        aiFailed = true;
+        this.deps.warn?.(`AI ideas failed, falling back to TheMealDB: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    if (!cards) {
       const want = req.onHand ? req.count * 3 : req.count * 2;
       const found = await this.deps.mealdb.candidates({
         cuisine: req.cuisine,
@@ -191,7 +204,7 @@ export class Service {
         mood: req.mood,
         want,
       });
-      note = found.note;
+      note = aiFailed ? `AI ideas aren't available right now; showing TheMealDB results. ${found.note}`.trim() : found.note;
       const refs = found.refs.filter((r) => !seen.has(`mealdb:${r.id}`)).slice(0, want);
       const meals = await mapLimit(refs, 4, async (r) => r.meal ?? (await this.deps.mealdb.lookup(r.id)));
       cards = meals.filter((m) => !!m).map((m) => mealDbToCard(m!));

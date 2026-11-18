@@ -38,6 +38,7 @@ const cardSchema = z.object({
 const deckSchema = z.object({
   source: z.enum(["new", "saved"]),
   mood: z.string().max(200).optional(),
+  ai: z.boolean().default(true),
   cuisine: z.string().max(60).optional(),
   category: z.string().max(60).optional(),
   onHand: z.boolean().default(false),
@@ -96,7 +97,7 @@ export function buildApp(config: Config, overrides: Partial<{ service: Service; 
   const ai = config.anthropicApiKey
     ? new AiRecipes(config.anthropicApiKey, config.anthropicModel, config.householdContext)
     : undefined;
-  const service = overrides.service ?? new Service({ config, mealie, mealdb, ai });
+  const service = overrides.service ?? new Service({ config, mealie, mealdb, ai, warn: (m) => app.log.warn(m) });
 
   // Optional shared passcode for the API (in addition to Cloudflare Access).
   app.addHook("onRequest", async (req, reply) => {

@@ -1,3 +1,4 @@
+import type { ComponentChildren } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { api, storageGet, storageSet, type AppConfigResponse, type Card, type MealType, type PlanDay } from "../api";
 import { IconRefresh, IconSearch, IconSliders, IconSparkle } from "../icons";
@@ -22,8 +23,81 @@ function loadPrefs(): Prefs {
   }
 }
 
+/**
+ * Horizontally scrolling row of pills. Touch scrolls natively; a vertical mouse
+ * wheel is turned into horizontal scrolling, and the row can be dragged with a mouse.
+ */
+function ChipRow(props: { children: ComponentChildren }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const drag = useRef<{ id: number; x: number; left: number; moved: boolean } | null>(null);
+  const [dragging, setDragging] = useState(false);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || Math.abs(e.deltaX) >= Math.abs(e.deltaY)) return;
+      const max = el.scrollWidth - el.clientWidth;
+      if (max <= 0) return;
+      const delta = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? el.clientWidth : 1);
+      // At an edge, let the page scroll instead of trapping the wheel.
+      if ((delta < 0 && el.scrollLeft <= 0) || (delta > 0 && el.scrollLeft >= max - 1)) return;
+      e.preventDefault();
+      el.scrollLeft += delta;
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+
+  const onPointerDown = (e: PointerEvent) => {
+    if (e.pointerType !== "mouse" || e.button !== 0 || !ref.current) return;
+    drag.current = { id: e.pointerId, x: e.clientX, left: ref.current.scrollLeft, moved: false };
+  };
+  const onPointerMove = (e: PointerEvent) => {
+    const d = drag.current;
+    const el = ref.current;
+    if (!d || !el || e.pointerId !== d.id) return;
+    const dx = e.clientX - d.x;
+    if (!d.moved && Math.abs(dx) > 5) {
+      d.moved = true;
+      el.setPointerCapture(e.pointerId);
+      setDragging(true);
+    }
+    if (d.moved) el.scrollLeft = d.left - dx;
+  };
+  const endDrag = () => {
+    drag.current = null;
+    setDragging(false);
+  };
+  // Swallow the click that ends a drag so it doesn't toggle a pill.
+  const onClickCapture = (e: MouseEvent) => {
+    if (drag.current?.moved) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    drag.current = null;
+  };
+
+  return (
+    <div
+      ref={ref}
+      class={`chip-row ${dragging ? "dragging" : ""}`}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={() => setDragging(false)}
+      onPointerCancel={endDrag}
+      onLostPointerCapture={() => setDragging(false)}
+      onClickCapture={onClickCapture}
+    >
+      {props.children}
+    </div>
+  );
+}
+
 export function Discover(props: {
   config: AppConfigResponse;
+  /** AI is configured on the server and the header toggle is on. */
+  aiOn: boolean;
   days: PlanDay[] | null;
   today: string;
   refreshWeek: () => void;
@@ -65,6 +139,7 @@ export function Discover(props: {
       const res = await api.deck({
         source,
         mood: mood.trim() || undefined,
+        ai: props.aiOn,
         cuisine,
         category,
         onHand,
@@ -91,6 +166,16 @@ export function Discover(props: {
   useEffect(() => {
     deal(false);
   }, [source, cuisine, category, onHand, leniency]);
+
+  // Flipping the AI toggle only changes results for a typed search on the "New ideas" deck.
+  const aiFirstRun = useRef(true);
+  useEffect(() => {
+    if (aiFirstRun.current) {
+      aiFirstRun.current = false;
+      return;
+    }
+    if (source === "new" && mood.trim()) deal(false);
+  }, [props.aiOn]);
 
   // Keep the deck topped up.
   useEffect(() => {
@@ -153,7 +238,7 @@ export function Discover(props: {
   };
 
   const filterCount = (cuisine ? 1 : 0) + (category ? 1 : 0) + (onHand ? 1 : 0);
-  const willUseAi = config.aiEnabled && source === "new" && mood.trim().length > 0;
+  const willUseAi = props.aiOn && source === "new" && mood.trim().length > 0;
 
   return (
     <div class="discover">
@@ -174,7 +259,7 @@ export function Discover(props: {
           enterKeyHint="go"
           placeholder={
             source === "new"
-              ? config.aiEnabled
+              ? props.aiOn
                 ? "What sounds good? e.g. cozy soup, spicy"
                 : "What sounds good? e.g. salmon, curry"
               : "Search our recipes"
@@ -217,27 +302,27 @@ export function Discover(props: {
           {config.cuisines.length > 0 && (
             <>
               <div class="filter-label">Cuisine</div>
-              <div class="chip-row">
+              <ChipRow>
                 <button class={`pill ${!cuisine ? "on" : ""}`} onClick={() => setCuisine(undefined)}>Any</button>
                 {config.cuisines.map((c) => (
                   <button key={c} class={`pill ${cuisine === c ? "on" : ""}`} onClick={() => setCuisine(cuisine === c ? undefined : c)}>
                     {c}
                   </button>
                 ))}
-              </div>
+              </ChipRow>
             </>
           )}
           {config.categories.length > 0 && (
             <>
               <div class="filter-label">Type</div>
-              <div class="chip-row">
+              <ChipRow>
                 <button class={`pill ${!category ? "on" : ""}`} onClick={() => setCategory(undefined)}>Any</button>
                 {config.categories.map((c) => (
                   <button key={c} class={`pill ${category === c ? "on" : ""}`} onClick={() => setCategory(category === c ? undefined : c)}>
                     {c}
                   </button>
                 ))}
-              </div>
+              </ChipRow>
             </>
           )}
         </div>

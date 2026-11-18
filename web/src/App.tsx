@@ -1,5 +1,5 @@
 import { useEffect, useState } from "preact/hooks";
-import { ApiError, api, hasPasscode, setPasscode, type AppConfigResponse, type PlanDay } from "./api";
+import { ApiError, api, hasPasscode, setPasscode, storageGet, storageSet, type AppConfigResponse, type PlanDay } from "./api";
 import { Discover } from "./components/Discover";
 import { Week } from "./components/Week";
 import { IconCalendar, IconExternal, IconLock, IconSparkle } from "./icons";
@@ -21,6 +21,12 @@ export function App() {
   const [days, setDays] = useState<PlanDay[] | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
   const today = todayIso();
+  const [aiOn, setAiOn] = useState(() => storageGet("dishdeck.ai") !== "off");
+  const toggleAi = () => {
+    const next = !aiOn;
+    setAiOn(next);
+    storageSet("dishdeck.ai", next ? "on" : "off");
+  };
 
   const notify = (message: string, link?: string, error?: boolean) => {
     const id = Date.now();
@@ -88,16 +94,29 @@ export function App() {
     <div class="app">
       <header class="topbar">
         <h1>Dish Deck</h1>
-        {config.aiEnabled && (
-          <span class="ai-on" title="AI ideas are on">
-            <IconSparkle size={14} /> AI
-          </span>
-        )}
+        <div class="topbar-actions">
+          {config.aiEnabled && (
+            <button
+              type="button"
+              class={`ai-on ${aiOn ? "" : "off"}`}
+              aria-pressed={aiOn}
+              title={aiOn ? "AI ideas are on (searches use Claude). Tap to turn off." : "AI ideas are off (searches use TheMealDB). Tap to turn on."}
+              onClick={toggleAi}
+            >
+              <IconSparkle size={14} /> AI
+            </button>
+          )}
+          {config.mealieUrl && (
+            <a class="mealie-link" href={config.mealieUrl} target="_blank" rel="noopener noreferrer" title="Open Mealie">
+              Mealie <IconExternal size={14} />
+            </a>
+          )}
+        </div>
       </header>
 
       <main>
         {tab === "discover" ? (
-          <Discover config={config} days={days} today={today} refreshWeek={refreshWeek} notify={notify} />
+          <Discover config={config} aiOn={config.aiEnabled && aiOn} days={days} today={today} refreshWeek={refreshWeek} notify={notify} />
         ) : (
           <Week days={days} today={today} refreshWeek={refreshWeek} notify={notify} />
         )}
