@@ -3,6 +3,7 @@ import { buildApp } from "../src/app.js";
 import type { Config } from "../src/config.js";
 import { MealieClient, type MealiePlanEntry, type MealieRecipe } from "../src/mealie.js";
 import { Service } from "../src/service.js";
+import type { AiRecipes } from "../src/sources/ai.js";
 import { MealDb } from "../src/sources/mealdb.js";
 import { mealieRecipe, teriyakiMeal } from "./fixtures.js";
 
@@ -136,6 +137,24 @@ describe("deck", () => {
     expect(card.onHand?.have).toBe(2);
     expect(card.onHand?.missing).toContain("chicken breasts");
     expect(card.onHand?.missing).not.toContain("water");
+  });
+
+  it("falls back to TheMealDB when the AI request fails", async () => {
+    const m = fakeMealie();
+    const warnings: string[] = [];
+    const failingAi = { generate: async () => { throw new Error("529 overloaded"); } } as unknown as AiRecipes;
+    const service = new Service({
+      config,
+      mealie: new MealieClient(config.mealieUrl, config.mealieToken, m.fetchImpl),
+      mealdb: fakeMealDb(),
+      ai: failingAi,
+      warn: (msg) => warnings.push(msg),
+      now: () => new Date("2026-11-18T18:00:00Z"),
+    });
+    const res = await service.deck({ source: "new", mood: "teriyaki", onHand: false, leniency: 2, count: 4, exclude: [] });
+    expect(res.cards.map((c) => c.source)).toEqual(["mealdb"]);
+    expect(res.note).toMatch(/AI ideas aren't available/);
+    expect(warnings[0]).toMatch(/529 overloaded/);
   });
 
   it("skips cards already shown or already in the recipe book", async () => {
