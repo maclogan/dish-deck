@@ -373,6 +373,8 @@ export class RecipeSites {
   /** Background reader: when each site may be asked again, and which are mid-request. */
   private nextAt = new Map<string, number>();
   private busySites = new Set<string>();
+  /** HTTP status of the last request per URL (for "couldn't index" messages). */
+  private lastStatus = new Map<string, number>();
   private indexing = new Map<string, Promise<void>>();
   private reading = new Map<string, Promise<WebRecipe | null>>();
 
@@ -397,6 +399,7 @@ export class RecipeSites {
       redirect: "follow",
       signal: AbortSignal.timeout(15_000),
     });
+    this.lastStatus.set(url, res.status);
     if (res.status === 429 || res.status === 503) {
       // The site wants a break: respect Retry-After (seconds), or leave it alone for an hour.
       const retry = Number(res.headers.get("retry-after"));
@@ -483,7 +486,12 @@ export class RecipeSites {
       // A site with a sitemap index lists everything there; the other candidates are duplicates.
       if (pages.size && !queue.some((q) => !candidates.includes(q))) break;
     }
-    if (!pages.size) throw new Error("no sitemap with recipe pages found");
+    if (!pages.size) {
+      // Say what happened to each address tried, e.g. "sitemap_index.xml 403", to tell blocking from no sitemap.
+      const tried = [`${base}/robots.txt`, ...seenMaps].map((u) => `${u.replace(base, "").replace(/^https?:\/\/[^/]+/, "") || u} ${this.lastStatus.get(u) ?? "failed"}`);
+      const blocked = [...seenMaps, `${base}/robots.txt`].some((u) => [401, 403, 429, 503].includes(this.lastStatus.get(u) ?? 0));
+      throw new Error(`${blocked ? "the site blocked the request" : "no sitemap with recipe pages found"} (${tried.join(", ")})`);
+    }
     // Leave out anything robots.txt asks crawlers not to fetch.
     const rules = parseRobots(robots ?? "");
     const allowed = [...pages.values()].filter((p) => robotsAllows(rules, p.url));
