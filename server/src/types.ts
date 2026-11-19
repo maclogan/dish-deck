@@ -18,6 +18,8 @@ export type DietId =
 export type MealFilter = "breakfast" | "lunch" | "dinner" | "dessert" | "snack";
 /** Nutrition goals, checked against per-serving nutrition. */
 export type GoalId = "low-calorie" | "low-carb" | "keto" | "high-protein" | "high-fiber" | "low-fat";
+/** How AI ideas should lean: real home cooking (the default), quick shortcuts, or restaurant/takeout favorites. */
+export type StyleId = "home" | "weeknight" | "takeout";
 
 /** Per-serving nutrition, when known (AI estimates or Mealie's nutrition fields). */
 export interface Nutrition {
@@ -42,7 +44,13 @@ export interface Card {
   title: string;
   description?: string;
   image?: string;
+  /** Credit for a photo found on Wikipedia or Pexels (not for TheMealDB or Mealie photos). */
+  imageCredit?: { text: string; url: string };
   cuisine?: string;
+  /** Regional tradition within the cuisine, e.g. "Sichuan" (AI ideas). */
+  region?: string;
+  /** The dish's name in its own language, e.g. "鱼香茄子" (AI ideas). */
+  nativeName?: string;
   category?: string;
   tags: string[];
   totalMinutes?: number;
@@ -81,6 +89,8 @@ export interface DeckRequest {
   dietary?: DietId[];
   /** Nutrition goals; a card needs to meet any one. New ideas need AI for these; saved recipes use Mealie nutrition or tags. */
   goals?: GoalId[];
+  /** How AI ideas should lean. Defaults to home-style. */
+  style?: StyleId;
   onHand: boolean;
   /** Max missing ingredients allowed when onHand is true. */
   leniency: number;
@@ -169,4 +179,5 @@ export interface AppConfigResponse {
   dietary: FilterOption<DietId>[];
   meals: FilterOption<MealFilter>[];
   goals: FilterOption<GoalId>[];
+  styles: FilterOption<StyleId>[];
 }

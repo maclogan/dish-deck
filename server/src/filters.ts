@@ -4,7 +4,7 @@
 // the same way to TheMealDB, AI ideas and saved Mealie recipes. Nutrition goals need
 // per-serving numbers, which only AI ideas (estimates) and some Mealie recipes have.
 
-import type { Card, DietId, FilterOption, GoalId, MealFilter, Nutrition } from "./types.js";
+import type { Card, DietId, FilterOption, GoalId, MealFilter, Nutrition, StyleId } from "./types.js";
 import { normalize } from "./util.js";
 
 export const DIETS: FilterOption<DietId>[] = [
@@ -47,6 +47,38 @@ const GOAL_DEFS: GoalDef[] = [
 ];
 
 export const GOALS: FilterOption<GoalId>[] = GOAL_DEFS.map(({ id, label }) => ({ id, label }));
+
+interface StyleDef extends FilterOption<StyleId> {
+  /** How to ask the AI for it. */
+  prompt: string;
+}
+
+const STYLE_DEFS: StyleDef[] = [
+  {
+    id: "home",
+    label: "Home-style",
+    prompt:
+      "Suggest dishes people actually cook at home in the places these cuisines come from: everyday family cooking and well-loved regional dishes, made the traditional way. " +
+      "Do not suggest Western restaurant or takeout adaptations (for Chinese, no General Tso's, orange chicken, sweet and sour pork, crab rangoon, chop suey, egg foo young) " +
+      "and do not simplify, Americanize or substitute away traditional ingredients. Specialty ingredients are welcome; use them whenever the dish calls for them.",
+  },
+  {
+    id: "weeknight",
+    label: "Weeknight shortcuts",
+    prompt:
+      "Suggest real dishes from these cuisines with smart shortcuts for a weeknight: about 40 minutes or less, fewer steps, but still recognisably the traditional dish and its key ingredients.",
+  },
+  {
+    id: "takeout",
+    label: "Takeout favorites",
+    prompt: "Suggest restaurant and takeout favorites (including Western-adapted dishes) made at home, better than delivery.",
+  },
+];
+
+export const STYLES: FilterOption<StyleId>[] = STYLE_DEFS.map(({ id, label }) => ({ id, label }));
+export const STYLE_IDS = STYLES.map((s) => s.id) as [StyleId, ...StyleId[]];
+export const stylePrompt = (id: StyleId) => STYLE_DEFS.find((s) => s.id === id)?.prompt ?? STYLE_DEFS[0]!.prompt;
+export const styleLabel = (id: StyleId) => STYLE_DEFS.find((s) => s.id === id)?.label ?? id;
 
 export const DIET_IDS = DIETS.map((d) => d.id) as [DietId, ...DietId[]];
 export const MEAL_IDS = MEALS.map((m) => m.id) as [MealFilter, ...MealFilter[]];

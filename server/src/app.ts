@@ -7,11 +7,12 @@ import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { Config } from "./config.js";
-import { DIETS, DIET_IDS, GOALS, GOAL_IDS, MEALS, MEAL_IDS } from "./filters.js";
+import { DIETS, DIET_IDS, GOALS, GOAL_IDS, MEALS, MEAL_IDS, STYLES, STYLE_IDS } from "./filters.js";
 import { MealieClient, MealieError } from "./mealie.js";
 import { Service, imageSig } from "./service.js";
 import { AiRecipes } from "./sources/ai.js";
 import { MealDb } from "./sources/mealdb.js";
+import { PhotoFinder } from "./sources/photos.js";
 import type { AppConfigResponse } from "./types.js";
 
 const mealType = z.enum(["lunch", "dinner"]);
@@ -23,7 +24,10 @@ const cardSchema = z.object({
   title: z.string().min(1).max(200),
   description: z.string().max(2000).optional(),
   image: z.string().max(2000).optional(),
+  imageCredit: z.object({ text: z.string().max(200), url: z.string().max(2000) }).optional(),
   cuisine: z.string().max(100).optional(),
+  region: z.string().max(100).optional(),
+  nativeName: z.string().max(200).optional(),
   category: z.string().max(100).optional(),
   tags: z.array(z.string().max(60)).max(20).default([]),
   totalMinutes: z.number().optional(),
@@ -57,6 +61,7 @@ const deckSchema = z.object({
   dietary: z.array(z.enum(DIET_IDS)).max(DIET_IDS.length).default([]),
   meal: z.enum(MEAL_IDS).optional(),
   goals: z.array(z.enum(GOAL_IDS)).max(GOAL_IDS.length).default([]),
+  style: z.enum(STYLE_IDS).default("home"),
   onHand: z.boolean().default(false),
   leniency: z.number().int().min(0).max(10).default(2),
   count: z.number().int().min(1).max(12).default(8),
@@ -126,7 +131,8 @@ export function buildApp(config: Config, overrides: Partial<{ service: Service; 
   const ai = config.anthropicApiKey
     ? new AiRecipes(config.anthropicApiKey, config.anthropicModel, config.householdContext)
     : undefined;
-  const service = overrides.service ?? new Service({ config, mealie, mealdb, ai, warn: (m) => app.log.warn(m) });
+  const photos = new PhotoFinder({ wikipediaApi: config.wikipediaApiUrl, pexelsKey: config.pexelsApiKey, warn: (m) => app.log.warn(m) });
+  const service = overrides.service ?? new Service({ config, mealie, mealdb, ai, photos, warn: (m) => app.log.warn(m) });
 
   // Optional shared passcode for the API (in addition to Cloudflare Access).
   app.addHook("onRequest", async (req, reply) => {
@@ -174,6 +180,7 @@ export function buildApp(config: Config, overrides: Partial<{ service: Service; 
       dietary: DIETS,
       meals: MEALS,
       goals: GOALS,
+      styles: STYLES,
     };
   });
 
