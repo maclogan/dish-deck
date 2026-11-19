@@ -5,8 +5,9 @@
 // Everything is cached in the Store, so a page is fetched and parsed once.
 
 import { gunzipSync } from "node:zlib";
+import { DIET_IDS, MEAL_IDS, fitsDiet, fitsMeal } from "../filters.js";
 import type { Store, IndexedPage } from "../store.js";
-import type { Card, MealType, Nutrition } from "../types.js";
+import type { Card, DietId, MealFilter, MealType, Nutrition } from "../types.js";
 import { mapLimit, normalize, parseMinutes, shuffle } from "../util.js";
 import { siteName } from "./sites.js";
 
@@ -64,6 +65,24 @@ export function nameFromUrl(url: string): string {
     return last.replace(/[-_]+/g, " ").replace(/\s+\d+$/, "").trim();
   } catch {
     return "";
+  }
+}
+
+/**
+ * The same page can show up under slightly different addresses (with or without "www." or a trailing
+ * slash, with tracking tags or a #fragment). This is the form used to tell them apart.
+ */
+export function canonicalUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    u.hash = "";
+    u.hostname = u.hostname.toLowerCase().replace(/^www\./, "");
+    u.protocol = "https:";
+    for (const k of [...u.searchParams.keys()]) if (/^(utm_|fbclid|gclid|mc_)/i.test(k)) u.searchParams.delete(k);
+    u.pathname = u.pathname.replace(/\/+$/, "") || "/";
+    return u.toString();
+  } catch {
+    return url;
   }
 }
 
@@ -231,6 +250,103 @@ export function webRecipeToCard(r: WebRecipe, extra: { region?: string; nativeNa
   };
 }
 
+/** Which diets and meals a recipe fits, saved with it so filtered decks can pick from the cache. */
+export function recipeFacts(r: WebRecipe): { diets: DietId[]; meals: MealFilter[] } {
+  const card = webRecipeToCard(r);
+  return {
+    diets: DIET_IDS.filter((d) => fitsDiet(r.ingredients, [d])),
+    meals: MEAL_IDS.filter((m) => fitsMeal(card, [m])),
+  };
+}
+
+/** Filters a recipe has to pass to be dealt. */
+export interface RecipeFilter {
+  diets?: DietId[];
+  meals?: MealFilter[];
+}
+
+const passes = (r: WebRecipe, f: RecipeFilter) => {
+  if (!f.diets?.length && !f.meals?.length) return true;
+  const facts = recipeFacts(r);
+  return (f.diets ?? []).every((d) => facts.diets.includes(d)) && (!f.meals?.length || f.meals.some((m) => facts.meals.includes(m)));
+};
+
+/**
+ * How well a page name answers a typed search, 0..1: all the search words should be in the name
+ * (for 3+ words, at least two thirds); shorter names rank higher ("salmon" -> "Miso Salmon" before
+ * "Salmon and Asparagus Sheet Pan Dinner with Herbs").
+ */
+export function searchScore(query: string, pageName: string): number {
+  const q = dishWords(query);
+  const p = dishWords(pageName);
+  if (!q.length || !p.length) return 0;
+  const pSet = new Set(p);
+  const joined = p.join("");
+  const hit = q.filter((w) => pSet.has(w) || (w.length >= 5 && joined.includes(w))).length;
+  const needed = q.length >= 3 ? Math.ceil((q.length * 2) / 3) : q.length;
+  if (hit < needed) return 0;
+  return (hit / q.length) * (1 / (1 + 0.08 * Math.max(0, p.length - hit)));
+}
+
+// ------------------------------------------------------------------ robots.txt
+
+export interface RobotsRules {
+  /** Seconds to wait between requests, if the site asks for it. */
+  crawlDelay?: number;
+  rules: { allow: boolean; pattern: string }[];
+}
+
+/**
+ * The parts of robots.txt that apply to us: the group for "dishdeck" if there is one, otherwise "*".
+ * Supports Allow/Disallow with * and $ wildcards (longest match wins) and Crawl-delay.
+ */
+export function parseRobots(text: string): RobotsRules {
+  type Group = { agents: string[]; rules: RobotsRules["rules"]; crawlDelay?: number };
+  const groups: Group[] = [];
+  let current: Group | undefined;
+  let lastWasAgent = false;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.replace(/#.*/, "").trim();
+    const m = /^([a-z-]+)\s*:\s*(.*)$/i.exec(line);
+    if (!m) continue;
+    const key = m[1]!.toLowerCase();
+    const value = m[2]!.trim();
+    if (key === "user-agent") {
+      if (!current || !lastWasAgent) groups.push((current = { agents: [], rules: [] }));
+      current.agents.push(value.toLowerCase());
+      lastWasAgent = true;
+      continue;
+    }
+    lastWasAgent = false;
+    if (!current) continue;
+    if (key === "disallow" && value) current.rules.push({ allow: false, pattern: value });
+    else if (key === "allow" && value) current.rules.push({ allow: true, pattern: value });
+    else if (key === "crawl-delay" && Number.isFinite(Number(value))) current.crawlDelay = Number(value);
+  }
+  const mine = groups.find((g) => g.agents.some((a) => a.includes("dishdeck"))) ?? groups.find((g) => g.agents.includes("*"));
+  return { crawlDelay: mine?.crawlDelay, rules: mine?.rules ?? [] };
+}
+
+export function robotsAllows(rules: RobotsRules, url: string): boolean {
+  let path: string;
+  try {
+    const u = new URL(url);
+    path = u.pathname + u.search;
+  } catch {
+    return false;
+  }
+  let best: { allow: boolean; len: number } | undefined;
+  for (const r of rules.rules) {
+    // Escape regex characters except * (any run) and a trailing $ (end of path).
+    const body = r.pattern.endsWith("$") ? r.pattern.slice(0, -1) : r.pattern;
+    const re = new RegExp("^" + body.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*") + (r.pattern.endsWith("$") ? "$" : ""));
+    if (re.test(path) && (!best || r.pattern.length > best.len || (r.pattern.length === best.len && r.allow))) {
+      best = { allow: r.allow, len: r.pattern.length };
+    }
+  }
+  return best?.allow ?? true;
+}
+
 // ------------------------------------------------------------------ sitemaps
 
 const locs = (xml: string) =>
@@ -251,6 +367,12 @@ interface Loaded {
 
 export class RecipeSites {
   private loaded = new Map<string, Loaded>();
+  private robotsCache = new Map<string, RobotsRules>();
+  /** Sites that answered "too many requests" / "unavailable": left alone until this time. */
+  private backoffUntil = new Map<string, number>();
+  /** Background reader: when each site may be asked again, and which are mid-request. */
+  private nextAt = new Map<string, number>();
+  private busySites = new Set<string>();
   private indexing = new Map<string, Promise<void>>();
   private reading = new Map<string, Promise<WebRecipe | null>>();
 
@@ -275,6 +397,13 @@ export class RecipeSites {
       redirect: "follow",
       signal: AbortSignal.timeout(15_000),
     });
+    if (res.status === 429 || res.status === 503) {
+      // The site wants a break: respect Retry-After (seconds), or leave it alone for an hour.
+      const retry = Number(res.headers.get("retry-after"));
+      const host = new URL(url).hostname.replace(/^www\./, "");
+      this.backoffUntil.set(host, Date.now() + (Number.isFinite(retry) && retry > 0 ? Math.min(retry, 86400) * 1000 : 3600_000));
+      this.opts.warn?.(`${host} asked us to slow down (HTTP ${res.status}); pausing background reads there`);
+    }
     if (!res.ok) return undefined;
     if (url.endsWith(".gz")) return gunzipSync(Buffer.from(await res.arrayBuffer())).toString("utf8");
     return res.text();
@@ -348,13 +477,28 @@ export class RecipeSites {
         }
         if (host !== domain || NOT_RECIPE.test(e.loc) || new URL(e.loc).pathname === "/") continue;
         const name = nameFromUrl(e.loc);
-        if (dishWords(name).length) pages.set(e.loc, { url: e.loc, domain, name, lastmod: e.lastmod });
+        // Keyed by canonical form, so a page listed twice (e.g. with and without a slash) is read once.
+        if (dishWords(name).length && !pages.has(canonicalUrl(e.loc))) pages.set(canonicalUrl(e.loc), { url: e.loc, domain, name, lastmod: e.lastmod });
       }
       // A site with a sitemap index lists everything there; the other candidates are duplicates.
       if (pages.size && !queue.some((q) => !candidates.includes(q))) break;
     }
     if (!pages.size) throw new Error("no sitemap with recipe pages found");
-    this.opts.store.replacePages(domain, [...pages.values()]);
+    // Leave out anything robots.txt asks crawlers not to fetch.
+    const rules = parseRobots(robots ?? "");
+    const allowed = [...pages.values()].filter((p) => robotsAllows(rules, p.url));
+    this.opts.store.replacePages(domain, allowed);
+    this.opts.store.setRobots(domain, robots ?? "");
+    this.robotsCache.set(domain, rules);
+  }
+
+  private robotsFor(domain: string): RobotsRules {
+    let r = this.robotsCache.get(domain);
+    if (!r) {
+      r = parseRobots(this.opts.store.robots(domain) ?? "");
+      this.robotsCache.set(domain, r);
+    }
+    return r;
   }
 
   private pagesOf(domain: string): Loaded["pages"] {
@@ -401,29 +545,128 @@ export class RecipeSites {
     return undefined;
   }
 
-  /** Random recipe pages from these sites (for browsing a cuisine without AI). */
-  async random(domains: string[], count: number, skip: Set<string>): Promise<WebRecipe[]> {
-    await this.ensureIndexed(domains, 20_000);
-    const pool = shuffle(domains.flatMap((d) => this.pagesOf(d)).filter((p) => !skip.has(`web:${p.url}`)));
+  /**
+   * Random recipes from these sites (browsing without AI). Recipes already read that fit the filters
+   * come first, straight from the cache; then unread pages are read until there are enough. With
+   * `wait: false`, sites still being indexed are skipped this time instead of waited for.
+   */
+  async random(domains: string[], count: number, skip: Set<string>, opts: RecipeFilter & { wait?: boolean } = {}): Promise<WebRecipe[]> {
+    if (opts.wait === false) void this.ensureIndexed(domains);
+    else await this.ensureIndexed(domains, 20_000);
     const out: WebRecipe[] = [];
-    // Pages are mostly recipes, but some are articles; read a few extra and keep the real recipes.
-    for (let i = 0; i < pool.length && out.length < count && i < count * 4; i += 4) {
+    const taken = new Set<string>();
+    const keep = (r: WebRecipe | null) => {
+      if (!r || taken.has(r.url) || skip.has(`web:${r.url}`) || !passes(r, opts)) return;
+      taken.add(r.url);
+      out.push(r);
+    };
+    for (const url of this.opts.store.readRecipeUrls(domains, { diets: opts.diets, meals: opts.meals, limit: count * 3 })) {
+      if (out.length >= count) break;
+      keep(await this.read(url));
+    }
+    const pool = shuffle(domains.flatMap((d) => this.pagesOf(d)).filter((p) => !skip.has(`web:${p.url}`) && !taken.has(p.url)));
+    // Some pages are articles, and filters reject some recipes; read a bounded number of extra pages.
+    const budget = count * (opts.diets?.length || opts.meals?.length ? 6 : 3);
+    for (let i = 0; i < pool.length && out.length < count && i < budget; i += 4) {
       const batch = await mapLimit(pool.slice(i, i + 4), 4, (p) => this.read(p.url));
-      out.push(...batch.filter((r): r is WebRecipe => !!r));
+      batch.forEach(keep);
     }
     return out.slice(0, count);
   }
 
+  /**
+   * Word search over the indexed page names (and read recipe titles) of these sites: free, no AI.
+   * Matches are read best-first until `count` recipes pass the filters.
+   */
+  async search(query: string, domains: string[], count: number, skip: Set<string>, opts: RecipeFilter & { wait?: boolean } = {}): Promise<WebRecipe[]> {
+    if (opts.wait === false) void this.ensureIndexed(domains);
+    else await this.ensureIndexed(domains, 20_000);
+    const scored: { url: string; score: number }[] = [];
+    domains.forEach((d, rank) => {
+      for (const p of this.pagesOf(d)) {
+        if (skip.has(`web:${p.url}`)) continue;
+        const score = searchScore(query, p.name);
+        if (score > 0) scored.push({ url: p.url, score: score - rank * 0.001 + Math.random() * 0.05 });
+      }
+    });
+    scored.sort((a, b) => b.score - a.score);
+    const out: WebRecipe[] = [];
+    for (let i = 0; i < scored.length && out.length < count && i < count * 3; i += 4) {
+      const batch = await mapLimit(scored.slice(i, i + 4), 4, (s) => this.read(s.url));
+      for (const r of batch) if (r && passes(r, opts) && out.length < count) out.push(r);
+    }
+    return out;
+  }
+
+  /**
+   * One round of background reading: every site that's due gets one unread page read, all sites in
+   * parallel (up to `parallel` requests at once, to go easy on a home connection). Each site is then left alone for `secondsPerSite` (or longer if
+   * its robots.txt asks for a Crawl-delay), and for an hour (or its Retry-After) after a 429/503. So
+   * the total speed grows with the number of sites while each site sees a slow, steady trickle.
+   * Also fills in diet/meal facts for recipes saved before facts existed. Never throws.
+   */
+  async prefetchRound(secondsPerSite: number, parallel = 4): Promise<number> {
+    try {
+      for (const row of this.opts.store.recipesWithoutFacts(200)) {
+        try {
+          this.opts.store.setFacts(row.url, recipeFacts(JSON.parse(row.json) as WebRecipe));
+        } catch {
+          /* unreadable row: leave it */
+        }
+      }
+      const now = Date.now();
+      const due = this.opts.store
+        .sitesWithUnread()
+        .filter((d) => !this.busySites.has(d) && (this.nextAt.get(d) ?? 0) <= now && (this.backoffUntil.get(d) ?? 0) <= now);
+      const results = await mapLimit(shuffle(due), parallel, async (domain): Promise<number> => {
+        const url = this.opts.store.unreadPagesFor(domain, 1)[0];
+        if (!url) return 0;
+        this.busySites.add(domain);
+        try {
+          await this.read(url);
+          return 1;
+        } finally {
+          this.busySites.delete(domain);
+          const gap = Math.max(secondsPerSite, this.robotsFor(domain).crawlDelay ?? 0);
+          this.nextAt.set(domain, Date.now() + gap * 1000);
+        }
+      });
+      return results.reduce((a, b) => a + b, 0);
+    } catch (err) {
+      this.opts.warn?.(`Background recipe reading failed: ${err instanceof Error ? err.message : err}`);
+      return 0;
+    }
+  }
+
   // ---- reading
 
-  /** The recipe on this page (cached), or null when it has none. */
-  read(url: string): Promise<WebRecipe | null> {
+  /** The indexed address for this page, if the index has it under a slightly different form. */
+  private knownUrl(url: string): string {
+    const canon = canonicalUrl(url);
+    const domain = new URL(canon).hostname;
+    return this.pagesOf(domain).find((p) => canonicalUrl(p.url) === canon)?.url ?? url;
+  }
+
+  /** The recipe on this page (cached), or null when it has none. Each page is fetched at most once. */
+  read(rawUrl: string): Promise<WebRecipe | null> {
+    const url = this.knownUrl(rawUrl);
     const cached = this.opts.store.getRecipe<WebRecipe>(url, RECIPE_TTL, NO_RECIPE_TTL);
     if (cached) return Promise.resolve(cached.value);
     const running = this.reading.get(url);
     if (running) return running;
     const job = (async () => {
       let recipe: WebRecipe | undefined;
+      const domain = (() => {
+        try {
+          return new URL(url).hostname.replace(/^www\./, "");
+        } catch {
+          return "";
+        }
+      })();
+      if (!robotsAllows(this.robotsFor(domain), url)) {
+        this.opts.store.putRecipe(url, null);
+        return null;
+      }
       try {
         const html = await this.get(url);
         recipe = html ? extractRecipe(html, url) : undefined;
@@ -431,7 +674,7 @@ export class RecipeSites {
         this.opts.warn?.(`Couldn't read ${url}: ${err instanceof Error ? err.message : err}`);
       }
       if (!recipe && this.opts.scrape) recipe = await this.opts.scrape(url).catch(() => undefined);
-      this.opts.store.putRecipe(url, recipe ?? null);
+      this.opts.store.putRecipe(url, recipe ?? null, recipe ? recipeFacts(recipe) : undefined);
       if (recipe) this.opts.store.renamePage(url, recipe.title);
       return recipe ?? null;
     })().finally(() => this.reading.delete(url));

@@ -102,7 +102,7 @@ export function App() {
               type="button"
               class={`ai-on ${aiOn ? "" : "off"}`}
               aria-pressed={aiOn}
-              title={aiOn ? "AI ideas are on (searches use Claude). Tap to turn off." : "AI ideas are off (searches use TheMealDB). Tap to turn on."}
+              title={aiOn ? "AI is on: Claude picks dishes and understands moods. Tap to turn off." : "AI is off: free recipes from your trusted sites. Tap to turn on."}
               onClick={toggleAi}
             >
               <IconSparkle size={14} /> AI

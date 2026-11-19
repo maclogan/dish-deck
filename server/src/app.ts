@@ -170,6 +170,28 @@ export function buildApp(config: Config, overrides: Partial<{ service: Service; 
     const warm = () => void sites.ensureIndexed(allSites(siteMap)).catch(() => undefined);
     setTimeout(warm, 5_000).unref();
     setInterval(warm, 12 * 3600_000).unref();
+    // Read recipe pages ahead of time, so filters (vegetarian, dessert, ...) can pick from recipes
+    // already read. Each site gets one request every PREFETCH_SECONDS_PER_SITE seconds (or its robots.txt
+    // Crawl-delay, if longer); sites are read in parallel, so the total speed scales with the site count.
+    if (config.prefetchSecondsPerSite > 0) {
+      let busy = false;
+      let reads = 0;
+      let lastReport = Date.now();
+      setInterval(async () => {
+        if (busy) return;
+        busy = true;
+        reads += await sites.prefetchRound(config.prefetchSecondsPerSite);
+        busy = false;
+        if (Date.now() - lastReport > 3600_000 && reads > 0) {
+          lastReport = Date.now();
+          const c = store.coverage();
+          const total = c.reduce((n, s) => n + s.pages, 0);
+          const read = c.reduce((n, s) => n + s.read, 0);
+          app.log.info(`Recipe pages read ahead: ${read} of ${total} across ${c.length} sites (${reads} in the last hour)`);
+          reads = 0;
+        }
+      }, 1_000).unref();
+    }
   }
 
   // Optional shared passcode for the API (in addition to Cloudflare Access).

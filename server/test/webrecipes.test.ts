@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { SearxngSearch } from "../src/sources/searxng.js";
 import { cleanDomain, siteList, sitesFor } from "../src/sources/sites.js";
-import { RecipeSites, extractRecipe, matchScore, nameFromUrl } from "../src/sources/webrecipes.js";
+import { RecipeSites, extractRecipe, matchScore, nameFromUrl, parseRobots, robotsAllows, searchScore } from "../src/sources/webrecipes.js";
 import { Store } from "../src/store.js";
 
 const ld = (obj: unknown) => `<html><head><script type="application/ld+json">${JSON.stringify(obj)}</script></head><body></body></html>`;
@@ -130,6 +130,17 @@ describe("trusted recipe sites", () => {
     expect(store.getRecipe("https://woks.test/red-braised-pork-belly-shopping-guide/", 1e12, 1e12)).toEqual({ value: null });
   });
 
+  it("treats the same page under a slightly different address as one page (no duplicate download)", async () => {
+    const web = fakeWeb();
+    const store = new Store(":memory:");
+    const sites = new RecipeSites({ store, fetch: web.fetchImpl });
+    await sites.ensureIndexed(["woks.test"]);
+    const a = await sites.read("https://woks.test/hong-shao-rou-red-braised-pork-belly/");
+    const b = await sites.read("https://www.woks.test/hong-shao-rou-red-braised-pork-belly?utm_source=x#recipe");
+    expect(b).toEqual(a);
+    expect(web.calls.filter((c) => c.includes("hong-shao-rou"))).toHaveLength(1);
+  });
+
   it("asks the search fallback for dishes the sitemap doesn't list", async () => {
     const web = fakeWeb();
     const asked: string[] = [];
@@ -159,6 +170,128 @@ describe("trusted recipe sites", () => {
       scrape: async (url) => ({ url, domain: "x.test", title: "Scraped", ingredients: ["a"], instructions: ["b"], keywords: [] }),
     });
     expect((await sites.read("https://x.test/r/"))?.title).toBe("Scraped");
+  });
+});
+
+describe("without AI: searching and browsing the indexes", () => {
+  it("scores typed searches by words in the page name, shorter names first", () => {
+    expect(searchScore("salmon", "miso glazed salmon")).toBeGreaterThan(searchScore("salmon", "salmon and asparagus sheet pan dinner with herbs"));
+    expect(searchScore("noodle soup", "beef noodle soup")).toBeGreaterThan(0);
+    expect(searchScore("noodle soup", "beef noodles")).toBe(0);
+    // Three or more words: two thirds is enough.
+    expect(searchScore("spicy pork noodles", "spicy pork mince")).toBeGreaterThan(0);
+  });
+
+  it("searches the index and reads the best matches, skipping what the household skipped", async () => {
+    const web = fakeWeb();
+    const sites = new RecipeSites({ store: new Store(":memory:"), fetch: web.fetchImpl });
+    const hits = await sites.search("pork belly", ["woks.test"], 4, new Set());
+    // The shopping guide matches the words too, but isn't a recipe.
+    expect(hits.map((r) => r.title)).toEqual(["Hong Shao Rou (Red Braised Pork Belly)"]);
+    expect(await sites.search("pork belly", ["woks.test"], 4, new Set(["web:https://woks.test/hong-shao-rou-red-braised-pork-belly/"]))).toEqual([]);
+  });
+
+  it("reads pages in the background and saves diet/meal facts, so filtered browsing comes from the cache", async () => {
+    const web = fakeWeb();
+    const store = new Store(":memory:");
+    const sites = new RecipeSites({ store, fetch: web.fetchImpl });
+    await sites.ensureIndexed(["woks.test"]);
+    expect(store.unreadPages(10)).toHaveLength(2);
+    // One page per site per round; with no gap the next round takes the next page.
+    expect(await sites.prefetchRound(0)).toBe(1);
+    expect(await sites.prefetchRound(0)).toBe(1);
+    expect(store.unreadPages(10)).toHaveLength(0);
+    expect(store.readRecipeUrls(["woks.test"], { limit: 10 })).toEqual(["https://woks.test/hong-shao-rou-red-braised-pork-belly/"]);
+    // Pork belly isn't vegetarian; it is gluten-free and dinner-friendly.
+    expect(store.readRecipeUrls(["woks.test"], { diets: ["vegetarian"], limit: 10 })).toEqual([]);
+    expect(store.readRecipeUrls(["woks.test"], { diets: ["gluten-free"], meals: ["dinner", "lunch"], limit: 10 })).toHaveLength(1);
+    const fetchesBefore = web.calls.length;
+    expect((await sites.random(["woks.test"], 3, new Set(), { diets: ["vegetarian"] })).length).toBe(0);
+    expect((await sites.random(["woks.test"], 3, new Set(), { diets: ["gluten-free"] })).map((r) => r.title)).toEqual(["Hong Shao Rou (Red Braised Pork Belly)"]);
+    // Everything came from the cache.
+    expect(web.calls.length).toBe(fetchesBefore);
+  });
+
+  it("fills in facts for recipes saved before facts existed", async () => {
+    const store = new Store(":memory:");
+    store.db.prepare("INSERT INTO recipes (url, json, fetched_at) VALUES (?, ?, ?)").run(
+      "https://old.test/r/",
+      JSON.stringify({ url: "https://old.test/r/", domain: "old.test", title: "Tofu Bowl", ingredients: ["1 block tofu", "1 cup rice"], instructions: ["Cook."], keywords: [] }),
+      Date.now(),
+    );
+    store.replacePages("old.test", [{ url: "https://old.test/r/", domain: "old.test", name: "tofu bowl" }]);
+    await new RecipeSites({ store, fetch: (async () => new Response("", { status: 404 })) as unknown as typeof fetch }).prefetchRound(5);
+    expect(store.readRecipeUrls(["old.test"], { diets: ["vegan"], limit: 5 })).toEqual(["https://old.test/r/"]);
+  });
+});
+
+describe("being polite to recipe sites", () => {
+  /** n sites with `per` recipe pages each, and an optional robots.txt / status per site. */
+  function sitesWeb(n: number, per: number, opts: { robots?: string; status?: (host: string) => number } = {}) {
+    const calls: string[] = [];
+    const fetchImpl = (async (input: URL | RequestInfo) => {
+      const url = new URL(String(input));
+      calls.push(url.href);
+      const status = opts.status?.(url.hostname) ?? 200;
+      if (status !== 200 && !url.pathname.endsWith(".xml") && url.pathname !== "/robots.txt") return new Response("busy", { status, headers: { "retry-after": "120" } });
+      if (url.pathname === "/robots.txt") return new Response(opts.robots ?? "");
+      if (url.pathname === "/sitemap_index.xml") {
+        return new Response(`<urlset>${Array.from({ length: per }, (_, i) => `<url><loc>https://${url.hostname}/dish-${i}/</loc></url>`).join("")}<url><loc>https://${url.hostname}/private/secret-dish/</loc></url></urlset>`);
+      }
+      const m = /dish-(\d+)/.exec(url.pathname);
+      return m ? new Response(recipePage(`Dish ${m[1]}`)) : new Response("nope", { status: 404 });
+    }) as typeof fetch;
+    const domains = Array.from({ length: n }, (_, i) => `site${i}.test`);
+    return { fetchImpl, calls, domains };
+  }
+
+  it("reads robots.txt: Disallow (with wildcards), Allow overrides, our own group, Crawl-delay", () => {
+    const r = parseRobots("User-agent: *\nDisallow: /private/\nDisallow: /*?print=\nAllow: /private/ok$\nCrawl-delay: 2\n\nUser-agent: BadBot\nDisallow: /");
+    expect(r.crawlDelay).toBe(2);
+    expect(robotsAllows(r, "https://a.test/private/x/")).toBe(false);
+    expect(robotsAllows(r, "https://a.test/private/ok")).toBe(true);
+    expect(robotsAllows(r, "https://a.test/private/ok/more")).toBe(false);
+    expect(robotsAllows(r, "https://a.test/mapo-tofu/?print=1")).toBe(false);
+    expect(robotsAllows(r, "https://a.test/mapo-tofu/")).toBe(true);
+    expect(parseRobots("User-agent: dishdeck\nDisallow: /\n\nUser-agent: *\nDisallow:").rules).toEqual([{ allow: false, pattern: "/" }]);
+  });
+
+  it("leaves robots-disallowed pages out of the index", async () => {
+    const web = sitesWeb(1, 2, { robots: "User-agent: *\nDisallow: /private/" });
+    const store = new Store(":memory:");
+    await new RecipeSites({ store, fetch: web.fetchImpl }).ensureIndexed(web.domains);
+    expect(store.pagesFor("site0.test").map((p) => p.url)).toEqual(["https://site0.test/dish-0/", "https://site0.test/dish-1/"]);
+  });
+
+  it("reads one page per site per round, in parallel, then leaves each site alone for the gap", async () => {
+    const web = sitesWeb(5, 3);
+    const store = new Store(":memory:");
+    const sites = new RecipeSites({ store, fetch: web.fetchImpl });
+    await sites.ensureIndexed(web.domains);
+    expect(await sites.prefetchRound(60)).toBe(5); // one from each of the 5 sites
+    expect(await sites.prefetchRound(60)).toBe(0); // every site is in its 60 s gap
+  });
+
+  it("waits longer when a site's robots.txt asks for a Crawl-delay", async () => {
+    const web = sitesWeb(1, 3, { robots: "User-agent: *\nCrawl-delay: 3600" });
+    const sites = new RecipeSites({ store: new Store(":memory:"), fetch: web.fetchImpl });
+    await sites.ensureIndexed(web.domains);
+    expect(await sites.prefetchRound(0)).toBe(1);
+    expect(await sites.prefetchRound(0)).toBe(0);
+  });
+
+  it("backs off a site that answers 429 Too Many Requests", async () => {
+    const warnings: string[] = [];
+    const web = sitesWeb(2, 3, { status: (h) => (h === "site0.test" ? 429 : 200) });
+    const sites = new RecipeSites({ store: new Store(":memory:"), fetch: web.fetchImpl, warn: (m) => warnings.push(m) });
+    await sites.ensureIndexed(web.domains);
+    await sites.prefetchRound(0);
+    const before = web.calls.filter((c) => c.includes("site0.test/dish")).length;
+    await sites.prefetchRound(0);
+    await sites.prefetchRound(0);
+    expect(web.calls.filter((c) => c.includes("site0.test/dish")).length).toBe(before);
+    expect(web.calls.filter((c) => c.includes("site1.test/dish")).length).toBe(3);
+    expect(warnings.some((w) => w.includes("site0.test asked us to slow down"))).toBe(true);
   });
 });
 

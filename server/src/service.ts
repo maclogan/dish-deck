@@ -28,7 +28,7 @@ import {
 } from "./filters.js";
 import { classifyRecipe, planWeek, slotKey, type ExistingSlot } from "./planner.js";
 import { nextRegions, type AiCard, type AiRecipes, type DishIdea } from "./sources/ai.js";
-import { sitesFor } from "./sources/sites.js";
+import { allSites, sitesFor } from "./sources/sites.js";
 import { webRecipeToCard, type RecipeSites, type WebRecipe } from "./sources/webrecipes.js";
 import type { Store } from "./store.js";
 import { mealDbToCard, type MealDb } from "./sources/mealdb.js";
@@ -503,15 +503,31 @@ export class Service {
       }
     }
 
-    // A cuisine without AI: browse the cuisine's trusted sites directly (free), before TheMealDB.
-    if (!aiFirst && req.cuisines.length && !mood && this.deps.sites && this.deps.siteMap) {
-      const domains = sitesFor(this.deps.siteMap, req.cuisines);
-      const found = await this.deps.sites.random(domains, req.count * 2, seen).catch(() => [] as WebRecipe[]);
-      const cards = (await this.pictured(found.map((r) => webRecipeToCard(r, { cuisine: req.cuisines.length === 1 ? req.cuisines[0] : undefined }))))
-        .filter((c) => fitsDiet(c.ingredients, dietary) && fitsMeal(c, req.meals));
+    // Without AI, the trusted sites come first (free): a typed search looks through their indexes, a
+    // cuisine browses that cuisine's sites, and plain browsing draws from every site. TheMealDB is the
+    // backup. (Dish types like "Beef" or "Pasta" are TheMealDB categories, so those stay with TheMealDB.)
+    if (!aiFirst && this.deps.sites && this.deps.siteMap && !req.categories.length) {
+      const siteMap = this.deps.siteMap;
+      const domains = req.cuisines.length ? sitesFor(siteMap, req.cuisines) : allSites(siteMap);
+      const filter = { diets: dietary, meals: req.meals };
+      const found = await (mood
+        ? this.deps.sites.search(mood, domains, req.count * 2, seen, { ...filter, wait: req.cuisines.length > 0 })
+        : // Plain browsing uses whichever sites are indexed already rather than waiting for the rest.
+          this.deps.sites.random(domains, req.count * 2, seen, { ...filter, wait: req.cuisines.length > 0 })
+      ).catch((err) => {
+        this.deps.warn?.(`Trusted-site lookup failed: ${err instanceof Error ? err.message : String(err)}`);
+        return [] as WebRecipe[];
+      });
+      const cuisine = req.cuisines.length === 1 ? req.cuisines[0] : undefined;
+      const cards = (await this.pictured(found.map((r) => webRecipeToCard(r, { cuisine })))).filter(
+        (c) => fitsDiet(c.ingredients, dietary) && fitsMeal(c, req.meals),
+      );
       const done = finish(cards);
       if (done.cards.length) {
-        return { cards: done.cards.slice(0, req.count), note: `Recipes from trusted sites · ${req.cuisines.join(" or ")}${filterSuffix({ ...req, goals: [] })}${done.suffix}` };
+        const what = mood ? `Matches for "${mood}" on trusted sites` : "Recipes from trusted sites";
+        const where = req.cuisines.length ? ` · ${req.cuisines.join(" or ")}` : "";
+        const goalsNote = goals.length ? " (nutrition goals need AI ideas, so they weren't applied)" : "";
+        return { cards: done.cards.slice(0, req.count), note: `${what}${where}${filterSuffix({ ...req, goals: [] })}${goalsNote}${done.suffix}` };
       }
     }
 
@@ -530,7 +546,8 @@ export class Service {
         mood: req.mood,
         want,
       });
-      note = found.note + filterSuffix({ ...req, goals: [] });
+      // Without repeats: a diet filter can also be the TheMealDB category it searched ("Vegetarian").
+      note = [...new Set([found.note, ...filterSuffix({ ...req, goals: [] }).split(" · ")].map((x) => x.trim()).filter(Boolean))].join(" · ");
       if (goals.length) note += ` (nutrition goals need AI ideas, so they weren't applied)`;
       if (aiFirst) note = `Couldn't get AI ideas this time; showing TheMealDB results. ${note}`.trim();
       const refs = found.refs.filter((r) => !seen.has(`mealdb:${r.id}`)).slice(0, want);
