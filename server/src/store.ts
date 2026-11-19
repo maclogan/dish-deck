@@ -75,6 +75,14 @@ export class Store {
     this.db = new DatabaseSync(file);
     this.db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;");
     this.db.exec(SCHEMA);
+    // Added after the first release: which diets and meals each recipe fits (",vegan,gluten-free,").
+    for (const col of ["diets", "meals"]) {
+      try {
+        this.db.exec(`ALTER TABLE recipes ADD COLUMN ${col} TEXT`);
+      } catch {
+        /* already there */
+      }
+    }
   }
 
   /** Open DATA_DIR/dishdeck.db, falling back to memory (with a warning) if the folder isn't writable. */
@@ -123,10 +131,56 @@ export class Store {
     return hit;
   }
 
-  putRecipe(url: string, value: unknown | null) {
+  putRecipe(url: string, value: unknown | null, facts?: { diets: string[]; meals: string[] }) {
     this.db
-      .prepare("INSERT OR REPLACE INTO recipes (url, json, fetched_at) VALUES (?, ?, ?)")
-      .run(url, value === null ? null : JSON.stringify(value), Date.now());
+      .prepare("INSERT OR REPLACE INTO recipes (url, json, fetched_at, diets, meals) VALUES (?, ?, ?, ?, ?)")
+      .run(url, value === null ? null : JSON.stringify(value), Date.now(), facts ? `,${facts.diets.join(",")},` : null, facts ? `,${facts.meals.join(",")},` : null);
+  }
+
+  setFacts(url: string, facts: { diets: string[]; meals: string[] }) {
+    this.db.prepare("UPDATE recipes SET diets = ?, meals = ? WHERE url = ?").run(`,${facts.diets.join(",")},`, `,${facts.meals.join(",")},`, url);
+  }
+
+  /** Indexed pages that haven't been read yet, in random order (for the background reader). */
+  unreadPages(limit: number): string[] {
+    return (this.db
+      .prepare("SELECT p.url AS url FROM pages p LEFT JOIN recipes r ON r.url = p.url WHERE r.url IS NULL ORDER BY random() LIMIT ?")
+      .all(limit) as unknown as { url: string }[]).map((r) => r.url);
+  }
+
+  /** Read recipes missing their diet/meal facts (saved before facts existed). */
+  recipesWithoutFacts(limit: number): { url: string; json: string }[] {
+    return this.db
+      .prepare("SELECT url, json FROM recipes WHERE json IS NOT NULL AND diets IS NULL LIMIT ?")
+      .all(limit) as unknown as { url: string; json: string }[];
+  }
+
+  /**
+   * Already-read recipe pages on these sites that fit every diet and any of the meals, in random
+   * order. Lets filtered decks pick from the cache instead of reading pages until something fits.
+   */
+  readRecipeUrls(domains: string[], opts: { diets?: string[]; meals?: string[]; limit: number }): string[] {
+    if (!domains.length) return [];
+    const where = [`p.domain IN (${domains.map(() => "?").join(",")})`, "r.json IS NOT NULL"];
+    const args: string[] = [...domains];
+    for (const d of opts.diets ?? []) {
+      where.push("r.diets LIKE ?");
+      args.push(`%,${d},%`);
+    }
+    if (opts.meals?.length) {
+      where.push(`(${opts.meals.map(() => "r.meals LIKE ?").join(" OR ")})`);
+      args.push(...opts.meals.map((m) => `%,${m},%`));
+    }
+    return (this.db
+      .prepare(`SELECT r.url AS url FROM recipes r JOIN pages p ON p.url = r.url WHERE ${where.join(" AND ")} ORDER BY random() LIMIT ?`)
+      .all(...args, opts.limit) as unknown as { url: string }[]).map((r) => r.url);
+  }
+
+  /** How many pages are indexed and how many have been read, per site (for logs and diagnostics). */
+  coverage(): { domain: string; pages: number; read: number }[] {
+    return this.db
+      .prepare("SELECT p.domain AS domain, COUNT(*) AS pages, COUNT(r.url) AS read FROM pages p LEFT JOIN recipes r ON r.url = p.url GROUP BY p.domain")
+      .all() as unknown as { domain: string; pages: number; read: number }[];
   }
 
   // ------------------------------------------------------------------ dish-name pools

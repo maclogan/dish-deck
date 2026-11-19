@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { SearxngSearch } from "../src/sources/searxng.js";
 import { cleanDomain, siteList, sitesFor } from "../src/sources/sites.js";
-import { RecipeSites, extractRecipe, matchScore, nameFromUrl } from "../src/sources/webrecipes.js";
+import { RecipeSites, extractRecipe, matchScore, nameFromUrl, searchScore } from "../src/sources/webrecipes.js";
 import { Store } from "../src/store.js";
 
 const ld = (obj: unknown) => `<html><head><script type="application/ld+json">${JSON.stringify(obj)}</script></head><body></body></html>`;
@@ -159,6 +159,56 @@ describe("trusted recipe sites", () => {
       scrape: async (url) => ({ url, domain: "x.test", title: "Scraped", ingredients: ["a"], instructions: ["b"], keywords: [] }),
     });
     expect((await sites.read("https://x.test/r/"))?.title).toBe("Scraped");
+  });
+});
+
+describe("without AI: searching and browsing the indexes", () => {
+  it("scores typed searches by words in the page name, shorter names first", () => {
+    expect(searchScore("salmon", "miso glazed salmon")).toBeGreaterThan(searchScore("salmon", "salmon and asparagus sheet pan dinner with herbs"));
+    expect(searchScore("noodle soup", "beef noodle soup")).toBeGreaterThan(0);
+    expect(searchScore("noodle soup", "beef noodles")).toBe(0);
+    // Three or more words: two thirds is enough.
+    expect(searchScore("spicy pork noodles", "spicy pork mince")).toBeGreaterThan(0);
+  });
+
+  it("searches the index and reads the best matches, skipping what the household skipped", async () => {
+    const web = fakeWeb();
+    const sites = new RecipeSites({ store: new Store(":memory:"), fetch: web.fetchImpl });
+    const hits = await sites.search("pork belly", ["woks.test"], 4, new Set());
+    // The shopping guide matches the words too, but isn't a recipe.
+    expect(hits.map((r) => r.title)).toEqual(["Hong Shao Rou (Red Braised Pork Belly)"]);
+    expect(await sites.search("pork belly", ["woks.test"], 4, new Set(["web:https://woks.test/hong-shao-rou-red-braised-pork-belly/"]))).toEqual([]);
+  });
+
+  it("reads pages in the background and saves diet/meal facts, so filtered browsing comes from the cache", async () => {
+    const web = fakeWeb();
+    const store = new Store(":memory:");
+    const sites = new RecipeSites({ store, fetch: web.fetchImpl });
+    await sites.ensureIndexed(["woks.test"]);
+    expect(store.unreadPages(10)).toHaveLength(2);
+    expect(await sites.prefetch(10)).toBe(2);
+    expect(store.unreadPages(10)).toHaveLength(0);
+    expect(store.readRecipeUrls(["woks.test"], { limit: 10 })).toEqual(["https://woks.test/hong-shao-rou-red-braised-pork-belly/"]);
+    // Pork belly isn't vegetarian; it is gluten-free and dinner-friendly.
+    expect(store.readRecipeUrls(["woks.test"], { diets: ["vegetarian"], limit: 10 })).toEqual([]);
+    expect(store.readRecipeUrls(["woks.test"], { diets: ["gluten-free"], meals: ["dinner", "lunch"], limit: 10 })).toHaveLength(1);
+    const fetchesBefore = web.calls.length;
+    expect((await sites.random(["woks.test"], 3, new Set(), { diets: ["vegetarian"] })).length).toBe(0);
+    expect((await sites.random(["woks.test"], 3, new Set(), { diets: ["gluten-free"] })).map((r) => r.title)).toEqual(["Hong Shao Rou (Red Braised Pork Belly)"]);
+    // Everything came from the cache.
+    expect(web.calls.length).toBe(fetchesBefore);
+  });
+
+  it("fills in facts for recipes saved before facts existed", async () => {
+    const store = new Store(":memory:");
+    store.db.prepare("INSERT INTO recipes (url, json, fetched_at) VALUES (?, ?, ?)").run(
+      "https://old.test/r/",
+      JSON.stringify({ url: "https://old.test/r/", domain: "old.test", title: "Tofu Bowl", ingredients: ["1 block tofu", "1 cup rice"], instructions: ["Cook."], keywords: [] }),
+      Date.now(),
+    );
+    store.replacePages("old.test", [{ url: "https://old.test/r/", domain: "old.test", name: "tofu bowl" }]);
+    await new RecipeSites({ store, fetch: (async () => new Response("", { status: 404 })) as unknown as typeof fetch }).prefetch(0);
+    expect(store.readRecipeUrls(["old.test"], { diets: ["vegan"], limit: 5 })).toEqual(["https://old.test/r/"]);
   });
 });
 

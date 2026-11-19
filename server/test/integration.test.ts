@@ -19,6 +19,7 @@ const config: Config = {
   anthropicModel: "claude-haiku-5-5",
   householdContext: "a busy family",
   wikipediaApiUrl: "https://en.wikipedia.test/w/api.php",
+  prefetchPerMinute: 0,
   mealdbKey: "1",
   mealdbBaseUrl: "https://www.themealdb.com",
   timezone: "America/Denver",
@@ -484,7 +485,14 @@ describe("real recipes from trusted sites", () => {
   ];
 
   function setupReal(store = new Store(":memory:")) {
-    const calls = { names: 0, generate: [] as unknown[], find: 0, random: 0 };
+    const calls = {
+      names: 0,
+      generate: [] as unknown[],
+      find: 0,
+      random: 0,
+      randomArgs: [] as { domains: string[]; wait?: boolean }[],
+      search: [] as { query: string; domains: string[] }[],
+    };
     const ai = {
       dishNames: async () => (calls.names++, DISHES),
       generate: async (req: { only?: { name: string }[] }) => {
@@ -505,7 +513,15 @@ describe("real recipes from trusted sites", () => {
         return undefined;
       },
       read: async (url: string) => Object.values(pages).find((p) => p.url === url) ?? null,
-      random: async () => (calls.random++, Object.values(pages)),
+      random: async (domains: string[], _n: number, _skip: Set<string>, opts: { wait?: boolean }) => {
+        calls.random++;
+        calls.randomArgs.push({ domains, wait: opts?.wait });
+        return Object.values(pages);
+      },
+      search: async (query: string, domains: string[]) => {
+        calls.search.push({ query, domains });
+        return Object.values(pages).filter((p) => p.title.toLowerCase().includes(query.toLowerCase()));
+      },
     } as unknown as RecipeSites;
     const m = fakeMealie();
     const service = new Service({
@@ -575,6 +591,30 @@ describe("real recipes from trusted sites", () => {
     expect(calls.names).toBe(0);
     expect(res.cards.every((c) => c.source === "web")).toBe(true);
     expect(res.note).toMatch(/^Recipes from trusted sites · Chinese/);
+  });
+
+  it("searches the trusted sites' indexes for a typed search when AI is off", async () => {
+    const { service, calls } = setupReal();
+    const res = await service.deck({ source: "new", ai: false, onHand: false, leniency: 2, count: 3, exclude: [], mood: "pancakes" });
+    expect(calls.search).toEqual([{ query: "pancakes", domains: ["thewoksoflife.com", "seriouseats.com"] }]);
+    expect(res.cards.map((c) => c.title)).toEqual(["Scallion Pancakes"]);
+    expect(res.note).toBe('Matches for "pancakes" on trusted sites');
+    expect(calls.names).toBe(0);
+  });
+
+  it("browses every trusted site for plain browsing, without waiting on sites still being indexed", async () => {
+    const { service, calls } = setupReal();
+    const res = await service.deck({ source: "new", onHand: false, leniency: 2, count: 3, exclude: [] });
+    expect(calls.randomArgs[0]).toEqual({ domains: ["thewoksoflife.com", "seriouseats.com"], wait: false });
+    expect(res.cards.every((c) => c.source === "web")).toBe(true);
+    expect(calls.names).toBe(0);
+  });
+
+  it("leaves dish types (TheMealDB categories) to TheMealDB", async () => {
+    const { service, calls } = setupReal();
+    const res = await service.deck({ source: "new", onHand: false, leniency: 2, count: 3, exclude: [], categories: ["Chicken"] });
+    expect(calls.random).toBe(0);
+    expect(res.cards.every((c) => c.source === "mealdb")).toBe(true);
   });
 
   it("still writes recipes with AI for nutrition goals (sites rarely list nutrition)", async () => {

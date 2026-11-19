@@ -5,8 +5,9 @@
 // Everything is cached in the Store, so a page is fetched and parsed once.
 
 import { gunzipSync } from "node:zlib";
+import { DIET_IDS, MEAL_IDS, fitsDiet, fitsMeal } from "../filters.js";
 import type { Store, IndexedPage } from "../store.js";
-import type { Card, MealType, Nutrition } from "../types.js";
+import type { Card, DietId, MealFilter, MealType, Nutrition } from "../types.js";
 import { mapLimit, normalize, parseMinutes, shuffle } from "../util.js";
 import { siteName } from "./sites.js";
 
@@ -231,6 +232,44 @@ export function webRecipeToCard(r: WebRecipe, extra: { region?: string; nativeNa
   };
 }
 
+/** Which diets and meals a recipe fits, saved with it so filtered decks can pick from the cache. */
+export function recipeFacts(r: WebRecipe): { diets: DietId[]; meals: MealFilter[] } {
+  const card = webRecipeToCard(r);
+  return {
+    diets: DIET_IDS.filter((d) => fitsDiet(r.ingredients, [d])),
+    meals: MEAL_IDS.filter((m) => fitsMeal(card, [m])),
+  };
+}
+
+/** Filters a recipe has to pass to be dealt. */
+export interface RecipeFilter {
+  diets?: DietId[];
+  meals?: MealFilter[];
+}
+
+const passes = (r: WebRecipe, f: RecipeFilter) => {
+  if (!f.diets?.length && !f.meals?.length) return true;
+  const facts = recipeFacts(r);
+  return (f.diets ?? []).every((d) => facts.diets.includes(d)) && (!f.meals?.length || f.meals.some((m) => facts.meals.includes(m)));
+};
+
+/**
+ * How well a page name answers a typed search, 0..1: all the search words should be in the name
+ * (for 3+ words, at least two thirds); shorter names rank higher ("salmon" -> "Miso Salmon" before
+ * "Salmon and Asparagus Sheet Pan Dinner with Herbs").
+ */
+export function searchScore(query: string, pageName: string): number {
+  const q = dishWords(query);
+  const p = dishWords(pageName);
+  if (!q.length || !p.length) return 0;
+  const pSet = new Set(p);
+  const joined = p.join("");
+  const hit = q.filter((w) => pSet.has(w) || (w.length >= 5 && joined.includes(w))).length;
+  const needed = q.length >= 3 ? Math.ceil((q.length * 2) / 3) : q.length;
+  if (hit < needed) return 0;
+  return (hit / q.length) * (1 / (1 + 0.08 * Math.max(0, p.length - hit)));
+}
+
 // ------------------------------------------------------------------ sitemaps
 
 const locs = (xml: string) =>
@@ -401,17 +440,81 @@ export class RecipeSites {
     return undefined;
   }
 
-  /** Random recipe pages from these sites (for browsing a cuisine without AI). */
-  async random(domains: string[], count: number, skip: Set<string>): Promise<WebRecipe[]> {
-    await this.ensureIndexed(domains, 20_000);
-    const pool = shuffle(domains.flatMap((d) => this.pagesOf(d)).filter((p) => !skip.has(`web:${p.url}`)));
+  /**
+   * Random recipes from these sites (browsing without AI). Recipes already read that fit the filters
+   * come first, straight from the cache; then unread pages are read until there are enough. With
+   * `wait: false`, sites still being indexed are skipped this time instead of waited for.
+   */
+  async random(domains: string[], count: number, skip: Set<string>, opts: RecipeFilter & { wait?: boolean } = {}): Promise<WebRecipe[]> {
+    if (opts.wait === false) void this.ensureIndexed(domains);
+    else await this.ensureIndexed(domains, 20_000);
     const out: WebRecipe[] = [];
-    // Pages are mostly recipes, but some are articles; read a few extra and keep the real recipes.
-    for (let i = 0; i < pool.length && out.length < count && i < count * 4; i += 4) {
+    const taken = new Set<string>();
+    const keep = (r: WebRecipe | null) => {
+      if (!r || taken.has(r.url) || skip.has(`web:${r.url}`) || !passes(r, opts)) return;
+      taken.add(r.url);
+      out.push(r);
+    };
+    for (const url of this.opts.store.readRecipeUrls(domains, { diets: opts.diets, meals: opts.meals, limit: count * 3 })) {
+      if (out.length >= count) break;
+      keep(await this.read(url));
+    }
+    const pool = shuffle(domains.flatMap((d) => this.pagesOf(d)).filter((p) => !skip.has(`web:${p.url}`) && !taken.has(p.url)));
+    // Some pages are articles, and filters reject some recipes; read a bounded number of extra pages.
+    const budget = count * (opts.diets?.length || opts.meals?.length ? 6 : 3);
+    for (let i = 0; i < pool.length && out.length < count && i < budget; i += 4) {
       const batch = await mapLimit(pool.slice(i, i + 4), 4, (p) => this.read(p.url));
-      out.push(...batch.filter((r): r is WebRecipe => !!r));
+      batch.forEach(keep);
     }
     return out.slice(0, count);
+  }
+
+  /**
+   * Word search over the indexed page names (and read recipe titles) of these sites: free, no AI.
+   * Matches are read best-first until `count` recipes pass the filters.
+   */
+  async search(query: string, domains: string[], count: number, skip: Set<string>, opts: RecipeFilter & { wait?: boolean } = {}): Promise<WebRecipe[]> {
+    if (opts.wait === false) void this.ensureIndexed(domains);
+    else await this.ensureIndexed(domains, 20_000);
+    const scored: { url: string; score: number }[] = [];
+    domains.forEach((d, rank) => {
+      for (const p of this.pagesOf(d)) {
+        if (skip.has(`web:${p.url}`)) continue;
+        const score = searchScore(query, p.name);
+        if (score > 0) scored.push({ url: p.url, score: score - rank * 0.001 + Math.random() * 0.05 });
+      }
+    });
+    scored.sort((a, b) => b.score - a.score);
+    const out: WebRecipe[] = [];
+    for (let i = 0; i < scored.length && out.length < count && i < count * 3; i += 4) {
+      const batch = await mapLimit(scored.slice(i, i + 4), 4, (s) => this.read(s.url));
+      for (const r of batch) if (r && passes(r, opts) && out.length < count) out.push(r);
+    }
+    return out;
+  }
+
+  /**
+   * Background reading: read a few not-yet-read pages (spread across sites at random), and fill in
+   * diet/meal facts for recipes saved before facts existed. Called on a timer; never throws.
+   */
+  async prefetch(pages: number): Promise<number> {
+    let read = 0;
+    try {
+      for (const row of this.opts.store.recipesWithoutFacts(200)) {
+        try {
+          this.opts.store.setFacts(row.url, recipeFacts(JSON.parse(row.json) as WebRecipe));
+        } catch {
+          /* unreadable row: leave it */
+        }
+      }
+      for (const url of this.opts.store.unreadPages(pages)) {
+        await this.read(url);
+        read++;
+      }
+    } catch (err) {
+      this.opts.warn?.(`Background recipe reading failed: ${err instanceof Error ? err.message : err}`);
+    }
+    return read;
   }
 
   // ---- reading
@@ -431,7 +534,7 @@ export class RecipeSites {
         this.opts.warn?.(`Couldn't read ${url}: ${err instanceof Error ? err.message : err}`);
       }
       if (!recipe && this.opts.scrape) recipe = await this.opts.scrape(url).catch(() => undefined);
-      this.opts.store.putRecipe(url, recipe ?? null);
+      this.opts.store.putRecipe(url, recipe ?? null, recipe ? recipeFacts(recipe) : undefined);
       if (recipe) this.opts.store.renamePage(url, recipe.title);
       return recipe ?? null;
     })().finally(() => this.reading.delete(url));

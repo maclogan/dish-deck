@@ -13,7 +13,7 @@ Dish Deck is a small, mobile-first web app you install on your phone (it's a PWA
   - Drag a card **top-right** to save it to Mealie, **bottom-right** to save it *and* put it on a day's lunch or dinner, **left** to skip. Tap a card for ingredients and steps.
   - **Real recipes from trusted sites**: pick a cuisine (or, with AI on, type a craving) and the cards are real recipes from well-regarded sites for that cuisine, e.g. The Woks of Life and Red House Spice for Chinese, Maangchi for Korean, Pati Jinich for Mexican. Each card shows the site and links back to it. See [Where recipes come from](#where-recipes-come-from).
   - **Authentic by default**: with AI on, Claude picks the dishes: home-style cooking from each cuisine's regions (rotating, e.g. Sichuan and Dongbei one deal, Cantonese and Yunnan the next), with the dish's native name. It only names dishes, which keeps token use small; the recipes come from the sites. The **Style** filter switches to *Weeknight shortcuts* or *Takeout favorites*.
-  - **Plain browsing** with no cuisine or search comes from [TheMealDB](https://www.themealdb.com) (free). Flipping the **AI** switch keeps your filters and the card you're looking at.
+  - **AI is optional.** With it off, everything still comes from the trusted sites, free: a cuisine browses that cuisine's sites, a typed search looks through the sites' indexes ("salmon", "dumplings", "noodle soup"), and plain browsing draws from every site. [TheMealDB](https://www.themealdb.com) is the backup, and handles the *Type* filter (Beef, Pasta, …). Flipping the **AI** switch keeps your filters and the card you're looking at.
   - **Every card has a real photo**: the recipe site's own, or one from Wikipedia (or Pexels if you add a key); cards with no photo are skipped.
   - **Skips are remembered** for the whole household, on every phone and across restarts, so a skipped recipe doesn't come back.
   - Tap a card and drag its sheet down (or tap the backdrop) to close it.
@@ -163,6 +163,7 @@ Every setting is documented in [`example.env`](example.env). Variables set in th
 | `DATA_DIR` | `/data` in the image | Folder for the SQLite cache and household history. Without a writable folder, both last only until a restart. |
 | `RECIPE_SITES` | (none) | Extra trusted sites, tried before the defaults: `Chinese: site.com, other.com; Jamaican: site.com` |
 | `SEARXNG_URL` | (none) | Optional self-hosted [SearXNG](https://docs.searxng.org) for dishes the sites' indexes miss |
+| `PREFETCH_PER_MINUTE` | `4` | Recipe pages read ahead in the background each minute (`0` turns it off) |
 | `BUSY_DAYS` | (none) | Days needing quick dinners, e.g. `tue,thu` |
 | `PLAN_START` | `today` | First day of the 7-day plan: `today`, `tomorrow`, `monday`, `sunday` |
 | `LEFTOVERS` | `true` | Turn leftover-friendly dinners into next-day lunches |
@@ -211,7 +212,8 @@ Dish Deck reads what's already in Mealie, so a little tidying there pays off:
 2. **Dish Deck finds each dish on a trusted site.** It indexes each site's sitemap (the public list of its pages) weekly and matches dish names against it, then checks the page's real recipe title.
 3. **It reads the recipe from the page's schema.org data**, the same data Google and Mealie's importer read. Pages without it go through Mealie's own scraper.
 4. **Not on any site?** With AI on, Claude writes that one recipe and the card is labelled *AI recipe*; with AI off, the dish is skipped. If you run SearXNG (below), it's searched first.
-5. **AI off + a cuisine:** cards are random recipes from that cuisine's sites. No AI at all.
+5. **AI off:** a cuisine deals random recipes from that cuisine's sites, a typed search matches words against every site's index, and plain browsing draws from all sites. No AI at all.
+6. **Reading ahead:** a background job reads a few recipe pages a minute (`PREFETCH_PER_MINUTE`, default 4) and notes which diets and meals each fits, so filters like *vegetarian* or *dessert* pick from recipes already read instead of reading pages while you wait. The log reports progress hourly.
 
 Everything is cached in `DATA_DIR`: site indexes, recipes, dish lists, which page each dish matched, photos, and skips. A recipe page is downloaded once.
 
@@ -225,7 +227,7 @@ Recipes stay their authors' work: cards link to the original page, and saved rec
 
 ## Costs and limits
 
-- **TheMealDB's free key** covers a limited catalog (a few hundred meals), so plain browsing starts repeating eventually.
+- **TheMealDB's free key** covers a limited catalog (a few hundred meals); it's now mostly a backup.
 - **AI** is used for dish names (a short request, cached and reused across many decks), nutrition goals (Claude writes those recipes, since sites rarely list nutrition), and recipes no site has. Haiku is the cheapest model, and you pay per use on your own key.
 - **Recipe sites, photo lookups (Wikipedia, Pexels) and SearXNG** are free.
 - **Planner and saved-recipe features** run entirely against Mealie and cost nothing.

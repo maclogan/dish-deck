@@ -170,6 +170,26 @@ export function buildApp(config: Config, overrides: Partial<{ service: Service; 
     const warm = () => void sites.ensureIndexed(allSites(siteMap)).catch(() => undefined);
     setTimeout(warm, 5_000).unref();
     setInterval(warm, 12 * 3600_000).unref();
+    // Read a few recipe pages a minute ahead of time, so filters (vegetarian, dessert, ...) can pick
+    // from recipes already read instead of reading pages while you wait.
+    if (config.prefetchPerMinute > 0) {
+      let busy = false;
+      let reads = 0;
+      setInterval(async () => {
+        if (busy) return;
+        busy = true;
+        reads += await sites.prefetch(config.prefetchPerMinute);
+        busy = false;
+        // An hourly progress line in the log.
+        if (reads >= config.prefetchPerMinute * 60) {
+          reads = 0;
+          const c = store.coverage();
+          const total = c.reduce((n, s) => n + s.pages, 0);
+          const read = c.reduce((n, s) => n + s.read, 0);
+          app.log.info(`Recipe pages read ahead: ${read} of ${total} across ${c.length} sites`);
+        }
+      }, 60_000).unref();
+    }
   }
 
   // Optional shared passcode for the API (in addition to Cloudflare Access).
