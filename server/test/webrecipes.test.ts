@@ -256,6 +256,43 @@ describe("being polite to recipe sites", () => {
     expect(parseRobots("User-agent: dishdeck\nDisallow: /\n\nUser-agent: *\nDisallow:").rules).toEqual([{ allow: false, pattern: "/" }]);
   });
 
+  it("says why a site couldn't be indexed: blocked, or empty sitemaps", async () => {
+    const blocked = (async () => new Response("no", { status: 403 })) as unknown as typeof fetch;
+    const s1 = new Store(":memory:");
+    await new RecipeSites({ store: s1, fetch: blocked }).ensureIndexed(["a.test"]);
+    expect(s1.db.prepare("SELECT error FROM sites").get()).toMatchObject({ error: expect.stringMatching(/^the site blocked the request \(\/robots.txt 403, \/sitemap_index.xml 403/) });
+    const emptyish = (async () => new Response("")) as unknown as typeof fetch;
+    const s2 = new Store(":memory:");
+    await new RecipeSites({ store: s2, fetch: emptyish }).ensureIndexed(["b.test"]);
+    expect(s2.db.prepare("SELECT error FROM sites").get()).toMatchObject({ error: expect.stringMatching(/^every sitemap came back empty/) });
+  });
+
+  it("skips taxonomy sitemaps (ingredients, cuisines, recipe tags) and keeps post/recipe ones", async () => {
+    const calls: string[] = [];
+    const fetchImpl = (async (input: URL | RequestInfo) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.endsWith("/robots.txt")) return new Response("Sitemap: https://k.test/sitemap_index.xml");
+      if (url.endsWith("/sitemap_index.xml")) {
+        return new Response(
+          ["post-sitemap.xml", "wprm_recipe-sitemap.xml", "ingredient-sitemap.xml", "cuisine-sitemap.xml", "wprm_course-sitemap.xml", "recipe-tag-sitemap.xml", "web-story-sitemap.xml"]
+            .map((m) => `<sitemap><loc>https://k.test/${m}</loc></sitemap>`)
+            .join("")
+            .replace(/^/, "<sitemapindex>") + "</sitemapindex>",
+        );
+      }
+      if (url.endsWith("/post-sitemap.xml")) return new Response("<urlset><url><loc>https://k.test/kimchi-stew/</loc></url></urlset>");
+      return new Response("<urlset></urlset>");
+    }) as typeof fetch;
+    const store = new Store(":memory:");
+    await new RecipeSites({ store, fetch: fetchImpl }).ensureIndexed(["k.test"]);
+    const read = calls.filter((c) => c.endsWith("sitemap.xml")).map((c) => c.replace("https://k.test/", ""));
+    expect(read).toContain("post-sitemap.xml");
+    // WP Recipe Maker's own sitemaps list recipe cards/taxonomies; the recipes themselves are posts.
+    for (const skipped of ["wprm_recipe-sitemap.xml", "ingredient-sitemap.xml", "cuisine-sitemap.xml", "wprm_course-sitemap.xml", "recipe-tag-sitemap.xml", "web-story-sitemap.xml"]) expect(read).not.toContain(skipped);
+    expect(store.pagesFor("k.test").map((p) => p.name)).toEqual(["kimchi stew"]);
+  });
+
   it("leaves robots-disallowed pages out of the index", async () => {
     const web = sitesWeb(1, 2, { robots: "User-agent: *\nDisallow: /private/" });
     const store = new Store(":memory:");
