@@ -163,7 +163,7 @@ Every setting is documented in [`example.env`](example.env). Variables set in th
 | `DATA_DIR` | `/data` in the image | Folder for the SQLite cache and household history. Without a writable folder, both last only until a restart. |
 | `RECIPE_SITES` | (none) | Extra trusted sites, tried before the defaults: `Chinese: site.com, other.com; Jamaican: site.com` |
 | `SEARXNG_URL` | (none) | Optional self-hosted [SearXNG](https://docs.searxng.org) for dishes the sites' indexes miss |
-| `PREFETCH_PER_MINUTE` | `4` | Recipe pages read ahead in the background each minute (`0` turns it off) |
+| `PREFETCH_SECONDS_PER_SITE` | `5` | Background reader: seconds between requests to any one site (`0` turns it off) |
 | `BUSY_DAYS` | (none) | Days needing quick dinners, e.g. `tue,thu` |
 | `PLAN_START` | `today` | First day of the 7-day plan: `today`, `tomorrow`, `monday`, `sunday` |
 | `LEFTOVERS` | `true` | Turn leftover-friendly dinners into next-day lunches |
@@ -213,7 +213,7 @@ Dish Deck reads what's already in Mealie, so a little tidying there pays off:
 3. **It reads the recipe from the page's schema.org data**, the same data Google and Mealie's importer read. Pages without it go through Mealie's own scraper.
 4. **Not on any site?** With AI on, Claude writes that one recipe and the card is labelled *AI recipe*; with AI off, the dish is skipped. If you run SearXNG (below), it's searched first.
 5. **AI off:** a cuisine deals random recipes from that cuisine's sites, a typed search matches words against every site's index, and plain browsing draws from all sites. No AI at all.
-6. **Reading ahead:** a background job reads a few recipe pages a minute (`PREFETCH_PER_MINUTE`, default 4) and notes which diets and meals each fits, so filters like *vegetarian* or *dessert* pick from recipes already read instead of reading pages while you wait. The log reports progress hourly.
+6. **Reading ahead:** a background job reads every indexed recipe page once and notes which diets and meals it fits, so filters like *vegetarian* or *dessert* pick from recipes already read instead of reading pages while you wait. Each site gets one request every 5 seconds (`PREFETCH_SECONDS_PER_SITE`), or longer if its robots.txt sets a Crawl-delay; sites are read in parallel (4 requests at a time), so the total is up to about 240 pages a minute while no single site sees more than 12. A site with 1,500 recipes takes about 2 hours; everything takes about a day and a few GB of downloads, once. Pages that robots.txt disallows are never fetched, and a site that answers "too many requests" is left alone for an hour. The log reports progress hourly.
 
 Everything is cached in `DATA_DIR`: site indexes, recipes, dish lists, which page each dish matched, photos, and skips. A recipe page is downloaded once.
 

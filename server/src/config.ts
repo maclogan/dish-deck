@@ -27,8 +27,8 @@ export interface Config {
   recipeSites?: string;
   /** Optional self-hosted SearXNG, for dishes the trusted sites' indexes don't have. */
   searxngUrl?: string;
-  /** Recipe pages read in the background per minute (0 turns it off). */
-  prefetchPerMinute: number;
+  /** Background reader: seconds between page reads on any one site (0 turns it off). Sites run in parallel. */
+  prefetchSecondsPerSite: number;
   mealdbKey: string;
   /** Override for TheMealDB's base URL (testing or a mirror). */
   mealdbBaseUrl: string;
@@ -146,8 +146,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     problems.push("BUSY_DAYS must be a comma-separated list of days like mon,wed,fri");
   }
 
-  const prefetch = Number(get("PREFETCH_PER_MINUTE") ?? 4);
-  if (!Number.isInteger(prefetch) || prefetch < 0 || prefetch > 60) problems.push("PREFETCH_PER_MINUTE must be a whole number from 0 to 60");
+  const prefetch = Number(get("PREFETCH_SECONDS_PER_SITE") ?? 5);
+  if (!Number.isFinite(prefetch) || (prefetch !== 0 && (prefetch < 1 || prefetch > 3600))) {
+    problems.push("PREFETCH_SECONDS_PER_SITE must be 0 (off) or between 1 and 3600");
+  }
 
   if (problems.length) {
     throw new ConfigError(`Configuration problems:\n  - ${problems.join("\n  - ")}\nSee example.env for every setting.`);
@@ -167,7 +169,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     dataDir: get("DATA_DIR"),
     recipeSites: get("RECIPE_SITES"),
     searxngUrl: get("SEARXNG_URL")?.replace(/\/+$/, ""),
-    prefetchPerMinute: prefetch,
+    prefetchSecondsPerSite: prefetch,
     mealdbKey: get("MEALDB_API_KEY") ?? "1",
     mealdbBaseUrl: get("MEALDB_BASE_URL") ?? "https://www.themealdb.com",
     timezone,

@@ -76,9 +76,9 @@ export class Store {
     this.db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;");
     this.db.exec(SCHEMA);
     // Added after the first release: which diets and meals each recipe fits (",vegan,gluten-free,").
-    for (const col of ["diets", "meals"]) {
+    for (const [table, col] of [["recipes", "diets"], ["recipes", "meals"], ["sites", "robots"]]) {
       try {
-        this.db.exec(`ALTER TABLE recipes ADD COLUMN ${col} TEXT`);
+        this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} TEXT`);
       } catch {
         /* already there */
       }
@@ -139,6 +139,30 @@ export class Store {
 
   setFacts(url: string, facts: { diets: string[]; meals: string[] }) {
     this.db.prepare("UPDATE recipes SET diets = ?, meals = ? WHERE url = ?").run(`,${facts.diets.join(",")},`, `,${facts.meals.join(",")},`, url);
+  }
+
+  /** A site's robots.txt as last fetched (undefined if never fetched). */
+  robots(domain: string): string | undefined {
+    const row = this.db.prepare("SELECT robots FROM sites WHERE domain = ?").get(domain) as { robots: string | null } | undefined;
+    return row?.robots ?? undefined;
+  }
+
+  setRobots(domain: string, text: string) {
+    this.db.prepare("UPDATE sites SET robots = ? WHERE domain = ?").run(text, domain);
+  }
+
+  /** Sites with at least one page that hasn't been read yet. */
+  sitesWithUnread(): string[] {
+    return (this.db
+      .prepare("SELECT DISTINCT p.domain AS domain FROM pages p LEFT JOIN recipes r ON r.url = p.url WHERE r.url IS NULL")
+      .all() as unknown as { domain: string }[]).map((r) => r.domain);
+  }
+
+  /** One site's unread pages, newest first (sitemap lastmod), so recent recipes are read early. */
+  unreadPagesFor(domain: string, limit: number): string[] {
+    return (this.db
+      .prepare("SELECT p.url AS url FROM pages p LEFT JOIN recipes r ON r.url = p.url WHERE p.domain = ? AND r.url IS NULL ORDER BY p.lastmod DESC LIMIT ?")
+      .all(domain, limit) as unknown as { url: string }[]).map((r) => r.url);
   }
 
   /** Indexed pages that haven't been read yet, in random order (for the background reader). */
@@ -227,7 +251,9 @@ export class Store {
         for (const p of pages) ins.run(p.url, domain, p.name, p.lastmod ?? null);
       }
       this.db
-        .prepare("INSERT OR REPLACE INTO sites (domain, indexed_at, pages, error) VALUES (?, ?, ?, ?)")
+        .prepare(
+          "INSERT INTO sites (domain, indexed_at, pages, error) VALUES (?, ?, ?, ?) ON CONFLICT(domain) DO UPDATE SET indexed_at = excluded.indexed_at, pages = excluded.pages, error = excluded.error",
+        )
         .run(domain, Date.now(), pages.length, error ?? null);
       this.db.exec("COMMIT");
     } catch (err) {

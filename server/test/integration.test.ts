@@ -19,7 +19,7 @@ const config: Config = {
   anthropicModel: "claude-haiku-5-5",
   householdContext: "a busy family",
   wikipediaApiUrl: "https://en.wikipedia.test/w/api.php",
-  prefetchPerMinute: 0,
+  prefetchSecondsPerSite: 0,
   mealdbKey: "1",
   mealdbBaseUrl: "https://www.themealdb.com",
   timezone: "America/Denver",
