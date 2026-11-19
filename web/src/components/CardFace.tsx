@@ -24,7 +24,15 @@ export function RecipeImage({ card, lazy = true }: { card: Pick<Card, "image" | 
   const [failed, setFailed] = useState<string | undefined>();
   if (!card.image || failed === card.image) return <Placeholder />;
   return (
-    <img src={card.image} alt="" loading={lazy ? "lazy" : undefined} draggable={false} onError={() => setFailed(card.image)} />
+    <img
+      src={card.image}
+      alt=""
+      loading={lazy ? "lazy" : undefined}
+      draggable={false}
+      // Some recipe sites refuse images requested from other sites; sending no referrer avoids that.
+      referrerpolicy="no-referrer"
+      onError={() => setFailed(card.image)}
+    />
   );
 }
 
@@ -45,9 +53,10 @@ export function CardFace({ card }: { card: Card }) {
         <RecipeImage card={card} />
         {card.source === "ai" && (
           <span class="ai-badge">
-            <IconSparkle size={14} /> AI idea
+            <IconSparkle size={14} /> AI recipe
           </span>
         )}
+        {card.source === "web" && card.site && <span class="ai-badge site-badge">{card.site}</span>}
         {card.source === "mealie" && <span class="ai-badge saved-badge">Saved</span>}
       </div>
       <div class="card-text">

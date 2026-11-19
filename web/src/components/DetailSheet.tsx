@@ -72,7 +72,7 @@ export function DetailSheet(props: {
 
           {(card.mealie?.url || card.sourceUrl) && (
             <a class="link" href={card.mealie?.url ?? card.sourceUrl} target="_blank" rel="noreferrer">
-              {card.mealie?.url ? "Open in Mealie" : "Original recipe"} <IconExternal size={14} />
+              {card.mealie?.url ? "Open in Mealie" : card.site ? `View on ${card.site}` : "Original recipe"} <IconExternal size={14} />
             </a>
           )}
 

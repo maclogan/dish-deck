@@ -14,6 +14,21 @@
 #
 # In .env, point MEALIE_URL at Mealie's in-cluster address, e.g.
 #   MEALIE_URL=http://mealie.mealie.svc.cluster.local:9000   (service "mealie" in namespace "mealie")
+#
+# The "dish-deck-data" volume keeps the recipe cache and the household's skipped/saved history
+# between restarts and updates. It uses the cluster's default storage class (on MicroK8s, enable it
+# with `microk8s enable hostpath-storage`).
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dish-deck-data
+  namespace: dish-deck
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -31,6 +46,9 @@ metadata:
     keel.sh/pollSchedule: "@every 1m"
 spec:
   replicas: 1
+  # One pod at a time owns the data volume (the old pod stops before the new one starts).
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: dish-deck
@@ -42,6 +60,7 @@ spec:
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
+        fsGroup: 1000
       containers:
         - name: dish-deck
           image: ghcr.io/maclogan/dish-deck:latest
@@ -54,6 +73,12 @@ spec:
           envFrom:
             - secretRef:
                 name: dish-deck-env
+          env:
+            - name: DATA_DIR
+              value: /data
+          volumeMounts:
+            - name: data
+              mountPath: /data
           ports:
             - name: http
               containerPort: 8080
@@ -71,6 +96,10 @@ spec:
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: dish-deck-data
 ---
 apiVersion: v1
 kind: Service

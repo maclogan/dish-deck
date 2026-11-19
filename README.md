@@ -11,9 +11,11 @@ Dish Deck is a small, mobile-first web app you install on your phone (it's a PWA
 
 - **Swipe deck**
   - Drag a card **top-right** to save it to Mealie, **bottom-right** to save it *and* put it on a day's lunch or dinner, **left** to skip. Tap a card for ingredients and steps.
-  - **New ideas** come from [TheMealDB](https://www.themealdb.com) (free). With an API key and the **AI** switch on, Claude handles typed cravings, cuisines and nutrition goals, and fills the deck whenever TheMealDB has nothing new for your filters. Flipping the switch keeps your filters and the card you're looking at.
-  - **Authentic by default**: AI ideas are home-style cooking from each cuisine's regions (rotating, e.g. Sichuan and Dongbei one deal, Cantonese and Yunnan the next), with the dish's native name. The **Style** filter switches to *Weeknight shortcuts* or *Takeout favorites*.
-  - **Every card has a real photo**: AI ideas (and saved recipes without a picture) get one from Wikipedia, or Pexels if you add a key; ideas with no photo are skipped.
+  - **Real recipes from trusted sites**: pick a cuisine (or, with AI on, type a craving) and the cards are real recipes from well-regarded sites for that cuisine, e.g. The Woks of Life and Red House Spice for Chinese, Maangchi for Korean, Pati Jinich for Mexican. Each card shows the site and links back to it. See [Where recipes come from](#where-recipes-come-from).
+  - **Authentic by default**: with AI on, Claude picks the dishes: home-style cooking from each cuisine's regions (rotating, e.g. Sichuan and Dongbei one deal, Cantonese and Yunnan the next), with the dish's native name. It only names dishes, which keeps token use small; the recipes come from the sites. The **Style** filter switches to *Weeknight shortcuts* or *Takeout favorites*.
+  - **Plain browsing** with no cuisine or search comes from [TheMealDB](https://www.themealdb.com) (free). Flipping the **AI** switch keeps your filters and the card you're looking at.
+  - **Every card has a real photo**: the recipe site's own, or one from Wikipedia (or Pexels if you add a key); cards with no photo are skipped.
+  - **Skips are remembered** for the whole household, on every phone and across restarts, so a skipped recipe doesn't come back.
   - Tap a card and drag its sheet down (or tap the backdrop) to close it.
   - **Our recipes** is your recipe book: every saved Mealie recipe in one grid of cards (see below).
 - **"What sounds good?"**: type a mood ("cozy soup", "something with salmon") or pick a cuisine or dish type.
@@ -31,8 +33,12 @@ Dish Deck is a small, mobile-first web app you install on your phone (it's a PWA
 
 ```
  phone (PWA) ──► Dish Deck server ──► Mealie API        (recipes, meal plans, on-hand foods)
-                                  ├──► TheMealDB API     (free recipe ideas)
-                                  └──► Claude API        (optional AI ideas)
+                       │          ├──► recipe sites      (sitemaps + recipe pages, free)
+                       │          ├──► TheMealDB API     (free recipe ideas)
+                       │          ├──► Claude API        (optional: dish names, AI recipes)
+                       │          ├──► Wikipedia/Pexels  (photos when a recipe has none)
+                       │          └──► SearXNG           (optional free search fallback)
+                       └── /data: SQLite cache + household history
 ```
 
 The browser only ever talks to the Dish Deck server. Your Mealie token and AI key stay on the server.
@@ -104,7 +110,8 @@ kubectl -n dish-deck get pods -w
 ```
 
 - In `.env`, use Mealie's in-cluster address, e.g. `MEALIE_URL=http://mealie.mealie.svc.cluster.local:9000` (service `mealie` in namespace `mealie`).
-- **Update to the newest version** (after GitHub Actions finishes building `main`). This is a rolling restart: the new pod starts before the old one stops.
+- **Storage:** the manifest includes a small volume (`dish-deck-data`, 1 GiB) for the recipe cache and the household's skip history. On MicroK8s, make sure storage is enabled: `microk8s enable hostpath-storage`.
+- **Update to the newest version** (after GitHub Actions finishes building `main`). The old pod stops before the new one starts, since only one pod can own the data volume; expect a few seconds of downtime.
   ```bash
   kubectl -n dish-deck rollout restart deploy/dish-deck
   kubectl -n dish-deck rollout status deploy/dish-deck
@@ -153,6 +160,9 @@ Every setting is documented in [`example.env`](example.env). Variables set in th
 | `PEXELS_API_KEY` | (none) | Optional free [Pexels](https://www.pexels.com/api/) key: stock food photos when Wikipedia has none |
 | `WIKIPEDIA_API_URL` | `https://en.wikipedia.org/w/api.php` | MediaWiki API used for dish photos (rarely changed) |
 | `MEALDB_API_KEY` | `1` | TheMealDB key |
+| `DATA_DIR` | `/data` in the image | Folder for the SQLite cache and household history. Without a writable folder, both last only until a restart. |
+| `RECIPE_SITES` | (none) | Extra trusted sites, tried before the defaults: `Chinese: site.com, other.com; Jamaican: site.com` |
+| `SEARXNG_URL` | (none) | Optional self-hosted [SearXNG](https://docs.searxng.org) for dishes the sites' indexes miss |
 | `BUSY_DAYS` | (none) | Days needing quick dinners, e.g. `tue,thu` |
 | `PLAN_START` | `today` | First day of the 7-day plan: `today`, `tomorrow`, `monday`, `sunday` |
 | `LEFTOVERS` | `true` | Turn leftover-friendly dinners into next-day lunches |
@@ -195,10 +205,29 @@ Dish Deck reads what's already in Mealie, so a little tidying there pays off:
   - `not again`: never picked.
   - Star ratings: higher-rated recipes come up more often.
 
+## Where recipes come from
+
+1. **Claude names the dishes** (AI on). One short request returns about 25 dish names with their native and romanized names, saved per cuisine/style/search and dealt from over many decks. Claude is only asked again when the list runs low (and not at all for a week if it had nothing new to add).
+2. **Dish Deck finds each dish on a trusted site.** It indexes each site's sitemap (the public list of its pages) weekly and matches dish names against it, then checks the page's real recipe title.
+3. **It reads the recipe from the page's schema.org data**, the same data Google and Mealie's importer read. Pages without it go through Mealie's own scraper.
+4. **Not on any site?** With AI on, Claude writes that one recipe and the card is labelled *AI recipe*; with AI off, the dish is skipped. If you run SearXNG (below), it's searched first.
+5. **AI off + a cuisine:** cards are random recipes from that cuisine's sites. No AI at all.
+
+Everything is cached in `DATA_DIR`: site indexes, recipes, dish lists, which page each dish matched, photos, and skips. A recipe page is downloaded once.
+
+**Default sites** live in [`server/src/sources/sites.ts`](server/src/sources/sites.ts) (15 cuisines, plus Serious Eats and Simply Recipes for searches and other cuisines). Add your favorites with `RECIPE_SITES`. A site works if it publishes a sitemap and puts schema.org recipe data on its pages (nearly every recipe blog does); sites that block automated requests are skipped, and the server log says so.
+
+**Free search fallback (optional):** [SearXNG](https://docs.searxng.org) is a self-hosted search engine with no keys or fees.
+- Kubernetes: `kubectl -n dish-deck create secret generic searxng --from-literal=secret=$(openssl rand -hex 32)`, then `kubectl apply -f deploy/searxng.yaml`, and set `SEARXNG_URL=http://searxng:8080`.
+- Docker Compose: `docker compose --profile search up -d` and set `SEARXNG_URL=http://searxng:8080`.
+
+Recipes stay their authors' work: cards link to the original page, and saved recipes keep that link in Mealie.
+
 ## Costs and limits
 
-- **TheMealDB's free key** covers a limited catalog (a few hundred meals), so new ideas without AI start repeating eventually.
-- **AI ideas** cost one Claude API request per deal of cards (searches, cuisine picks, nutrition goals, and the fallback when TheMealDB runs dry). Haiku is the cheapest model, and you pay per use on your own key. Photo lookups (Wikipedia, Pexels) are free.
+- **TheMealDB's free key** covers a limited catalog (a few hundred meals), so plain browsing starts repeating eventually.
+- **AI** is used for dish names (a short request, cached and reused across many decks), nutrition goals (Claude writes those recipes, since sites rarely list nutrition), and recipes no site has. Haiku is the cheapest model, and you pay per use on your own key.
+- **Recipe sites, photo lookups (Wikipedia, Pexels) and SearXNG** are free.
 - **Planner and saved-recipe features** run entirely against Mealie and cost nothing.
 
 ## Development
@@ -207,8 +236,8 @@ Dish Deck reads what's already in Mealie, so a little tidying there pays off:
 npm install
 npm run dev:mock          # fake Mealie + TheMealDB on :9100 (no real data touched)
 npm run dev:server:mock   # API server on :8080 using dev/mock.env
-# To try AI mode offline, the mock also fakes Claude:
-# ANTHROPIC_API_KEY=dev ANTHROPIC_BASE_URL=http://localhost:9100 npm run dev:server:mock
+# The mock also fakes Claude, two recipe sites and SearXNG, to try the whole flow offline:
+# ANTHROPIC_API_KEY=dev ANTHROPIC_BASE_URL=http://localhost:9100 DEV_SITE_PROXY=http://localhost:9100 DATA_DIR=./data npm run dev:server:mock
 npm run dev:web           # UI with hot reload on http://localhost:5173
 npm test                  # unit + integration tests
 npm run typecheck

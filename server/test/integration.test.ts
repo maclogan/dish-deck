@@ -6,6 +6,8 @@ import { Service, imageSig } from "../src/service.js";
 import type { AiRecipes } from "../src/sources/ai.js";
 import { MealDb } from "../src/sources/mealdb.js";
 import type { PhotoFinder } from "../src/sources/photos.js";
+import type { RecipeSites, WebRecipe } from "../src/sources/webrecipes.js";
+import { Store } from "../src/store.js";
 import { mealieRecipe, teriyakiMeal } from "./fixtures.js";
 
 const config: Config = {
@@ -456,5 +458,138 @@ describe("cuisine list", () => {
     expect(rankCuisines(["Uruguayan", "Thai", "Italian", "Croatian", "Mexican", "Algerian"])).toEqual([
       "Italian", "Mexican", "Thai", "Algerian", "Croatian", "Uruguayan",
     ]);
+  });
+});
+
+describe("real recipes from trusted sites", () => {
+  const web = (title: string, path: string): WebRecipe => ({
+    url: `https://thewoksoflife.com/${path}/`,
+    domain: "thewoksoflife.com",
+    title,
+    image: `https://img.test/${path}.jpg`,
+    ingredients: ["1 lb pork belly", "2 tbsp Shaoxing wine"],
+    instructions: ["Braise."],
+    keywords: [],
+  });
+  const pages: Record<string, WebRecipe> = {
+    "hong shao rou": web("Hong Shao Rou (Red Braised Pork Belly)", "hong-shao-rou"),
+    "fish fragrant eggplant": web("Fish-Fragrant Eggplant", "yu-xiang-qie-zi"),
+    "scallion pancake": web("Scallion Pancakes", "scallion-pancakes"),
+  };
+  const DISHES = [
+    { name: "Red-Braised Pork Belly", nativeName: "红烧肉", aliases: ["Red-Braised Pork Belly", "hong shao rou"], region: "Hunan", suits: ["dinner"] },
+    { name: "Fish-Fragrant Eggplant", nativeName: "鱼香茄子", aliases: ["Fish-Fragrant Eggplant"], region: "Sichuan", suits: ["dinner"] },
+    { name: "Scallion Pancakes", aliases: ["Scallion Pancake"], region: "Shanghai", suits: ["lunch"] },
+    { name: "Lion's Head Meatballs", nativeName: "狮子头", aliases: ["Lion's Head Meatballs"], region: "Jiangsu", suits: ["dinner"] },
+  ];
+
+  function setupReal(store = new Store(":memory:")) {
+    const calls = { names: 0, generate: [] as unknown[], find: 0, random: 0 };
+    const ai = {
+      dishNames: async () => (calls.names++, DISHES),
+      generate: async (req: { only?: { name: string }[] }) => {
+        calls.generate.push(req);
+        return (req.only ?? [{ name: "Grandma's Stew" }]).map((d) => ({
+          key: `ai:${d.name.toLowerCase().replace(/[^a-z]+/g, "-")}`, source: "ai", title: d.name, tags: [], ingredients: ["1 lb pork"], instructions: ["Cook."], photoHint: {},
+          nutrition: { calories: 300, protein: 30, carbs: 10, fat: 10, fiber: 2 },
+        }));
+      },
+    } as unknown as AiRecipes;
+    const sites = {
+      find: async (aliases: string[]) => {
+        calls.find++;
+        for (const a of aliases) {
+          const hit = Object.entries(pages).find(([k]) => a.toLowerCase().replace(/-/g, " ").includes(k));
+          if (hit) return hit[1];
+        }
+        return undefined;
+      },
+      read: async (url: string) => Object.values(pages).find((p) => p.url === url) ?? null,
+      random: async () => (calls.random++, Object.values(pages)),
+    } as unknown as RecipeSites;
+    const m = fakeMealie();
+    const service = new Service({
+      config,
+      mealie: new MealieClient(config.mealieUrl, config.mealieToken, m.fetchImpl),
+      mealdb: fakeMealDb(),
+      ai,
+      sites,
+      store,
+      siteMap: { Chinese: ["thewoksoflife.com"], General: ["seriouseats.com"] },
+    });
+    return { service, calls, store, m };
+  }
+  const chinese = { source: "new" as const, onHand: false, leniency: 2, count: 3, exclude: [] as string[], cuisines: ["Chinese"] };
+
+  it("deals real recipes for Claude's dish names, with an AI-written recipe only for the dish no site has", async () => {
+    const { service, calls } = setupReal();
+    const res = await service.deck({ ...chinese, count: 4 });
+    const bySource = (s: string) => res.cards.filter((c) => c.source === s).map((c) => c.title).sort();
+    expect(bySource("web")).toEqual(["Fish-Fragrant Eggplant", "Hong Shao Rou (Red Braised Pork Belly)", "Scallion Pancakes"]);
+    expect(bySource("ai")).toEqual(["Lion's Head Meatballs"]);
+    expect(res.cards.find((c) => c.source === "web" && c.title.startsWith("Hong"))).toMatchObject({ site: "The Woks of Life", nativeName: "红烧肉", region: "Hunan", cuisine: "Chinese", sourceUrl: "https://thewoksoflife.com/hong-shao-rou/" });
+    expect(res.note).toBe("Recipes from trusted sites · Chinese (1 written by AI)");
+    // Only the unmatched dish was written, by name.
+    expect((calls.generate[0] as { only: { name: string }[] }).only.map((d) => d.name)).toEqual(["Lion's Head Meatballs"]);
+  });
+
+  it("reuses the saved dish list and the dish -> page matches on the next deck", async () => {
+    const { service, calls } = setupReal();
+    const first = await service.deck({ ...chinese, count: 2 });
+    const findsAfterFirst = calls.find;
+    const second = await service.deck({ ...chinese, count: 2, exclude: first.cards.map((c) => c.key) });
+    expect(calls.names).toBe(1);
+    expect(second.cards.map((c) => c.key)).not.toEqual(expect.arrayContaining(first.cards.map((c) => c.key)));
+    // Dishes already matched aren't looked up again.
+    expect(calls.find - findsAfterFirst).toBeLessThanOrEqual(DISHES.length - first.cards.filter((c) => c.source === "web").length);
+  });
+
+  it("stops asking Claude for more names when it has nothing new to add", async () => {
+    const { service, calls } = setupReal();
+    let exclude: string[] = [];
+    for (let i = 0; i < 4; i++) {
+      const res = await service.deck({ ...chinese, exclude });
+      exclude = [...exclude, ...res.cards.map((c) => c.key)];
+    }
+    // First fill, one refill that only returned dishes it already had, then no more calls.
+    expect(calls.names).toBe(2);
+  });
+
+  it("keeps a skipped recipe out of later decks, on any device and after a restart", async () => {
+    const store = new Store(":memory:");
+    const a = setupReal(store);
+    const res = await a.service.deck(chinese);
+    const skipped = res.cards.find((c) => c.source === "web")!;
+    a.service.history({ key: skipped.key, action: "skip", title: skipped.title });
+    const b = setupReal(store); // a fresh app with the same data volume
+    for (let i = 0; i < 3; i++) {
+      const again = await b.service.deck(chinese);
+      expect(again.cards.map((c) => c.key)).not.toContain(skipped.key);
+    }
+  });
+
+  it("browses a cuisine's sites directly when AI is off (no Claude at all)", async () => {
+    const { service, calls } = setupReal();
+    const res = await service.deck({ ...chinese, ai: false });
+    expect(calls.random).toBe(1);
+    expect(calls.names).toBe(0);
+    expect(res.cards.every((c) => c.source === "web")).toBe(true);
+    expect(res.note).toMatch(/^Recipes from trusted sites · Chinese/);
+  });
+
+  it("still writes recipes with AI for nutrition goals (sites rarely list nutrition)", async () => {
+    const { service, calls } = setupReal();
+    const res = await service.deck({ ...chinese, goals: ["high-protein"] });
+    expect(calls.names).toBe(0);
+    expect(res.cards.map((c) => c.source)).toEqual(["ai"]);
+  });
+
+  it("saves a real recipe with its source link and remembers it", async () => {
+    const { service, store, m } = setupReal();
+    const card = (await service.deck(chinese)).cards.find((c) => c.source === "web")!;
+    await service.save({ card, target: "book" });
+    const create = m.calls.find((c) => c.path === "/api/recipes/create/html-or-json")!;
+    expect(create.body.url).toBe(card.sourceUrl);
+    expect(store.excludedKeys().has(card.key)).toBe(true);
   });
 });

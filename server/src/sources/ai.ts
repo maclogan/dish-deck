@@ -27,6 +27,22 @@ export interface AiRequest {
   avoid: string[];
   /** A sample of saved recipe names, as a hint about the household's taste. */
   bookSample: string[];
+  /** Write recipes for exactly these dishes (no suggesting). */
+  only?: { name: string; nativeName?: string; region?: string }[];
+  /** Regions to focus on (otherwise picked at random for the cuisines). */
+  regions?: string[];
+}
+
+/** A dish suggestion without a recipe: the cheap first step before finding a real recipe page. */
+export interface DishIdea {
+  name: string;
+  nativeName?: string;
+  /** Other names sites use for it, incl. romanized forms ("yuxiang qiezi", "Sichuan eggplant"). */
+  aliases: string[];
+  region?: string;
+  cuisine?: string;
+  suits: MealType[];
+  wikipediaTitle?: string;
 }
 
 interface AiRecipe {
@@ -86,6 +102,27 @@ const REGIONS: Record<string, string[]> = {
   portuguese: ["Lisbon", "Porto and the North", "Alentejo", "the Algarve", "the Azores and Madeira"],
   egyptian: ["Cairo street food", "Alexandria", "Upper Egypt", "Egyptian home cooking"],
 };
+
+/**
+ * Regions for the next batch of dish names, preferring ones not used yet for this list (so a growing
+ * list keeps exploring); starts over once every region has had a turn.
+ */
+export function nextRegions(cuisines: string[], used: string[], random: () => number = Math.random): string[] {
+  const usedSet = new Set(used);
+  const fresh = (c: string) => (REGIONS[c.toLowerCase()] ?? []).filter((r) => !usedSet.has(cuisines.length > 1 ? `${r} (${c})` : r));
+  const anyFresh = cuisines.some((c) => fresh(c).length > 0);
+  if (!anyFresh) return pickRegions(cuisines, random);
+  const out: string[] = [];
+  const per = cuisines.length > 1 ? 1 : 2;
+  for (const c of cuisines) {
+    const pool = fresh(c);
+    for (let i = 0; i < per && pool.length; i++) {
+      const [pick] = pool.splice(Math.floor(random() * pool.length), 1);
+      out.push(cuisines.length > 1 ? `${pick} (${c})` : pick!);
+    }
+  }
+  return out;
+}
 
 /** Two regions per cuisine (one each when there are several), chosen at random for this deal. */
 export function pickRegions(cuisines: string[], random: () => number = Math.random): string[] {
@@ -160,6 +197,37 @@ const TOOL: Anthropic.Tool = {
   },
 };
 
+const NAMES_TOOL: Anthropic.Tool = {
+  name: "suggest_dishes",
+  description: "Return dish names (no recipes) for a home cook.",
+  input_schema: {
+    type: "object",
+    properties: {
+      dishes: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            name: { type: "string", description: "The dish's usual English name." },
+            nativeName: { type: "string", description: "Name in its own language and script (omit for English dishes)." },
+            aliases: {
+              type: "array",
+              items: { type: "string" },
+              description: "2-5 other names recipe sites use: romanized native name (e.g. 'yuxiang qiezi'), common English names.",
+            },
+            region: { type: "string" },
+            cuisine: { type: "string" },
+            suits: { type: "array", items: { type: "string", enum: ["lunch", "dinner"] } },
+            wikipediaTitle: { type: "string", description: "Exact English Wikipedia article title, if one exists." },
+          },
+          required: ["name", "aliases", "suits"],
+        },
+      },
+    },
+    required: ["dishes"],
+  },
+};
+
 /** An AI idea plus hints for finding its photo (stripped before it goes to the browser). */
 export type AiCard = Card & { photoHint: { wikipediaTitle?: string; search?: string } };
 
@@ -170,52 +238,96 @@ export class AiRecipes {
     this.client = new Anthropic({ apiKey });
   }
 
-  async generate(req: AiRequest): Promise<AiCard[]> {
+  /** The shared part of both prompts: what to suggest, for whom, with which filters. */
+  private brief(req: AiRequest, what: string) {
     const meals = req.meals ?? [];
     const cuisines = req.cuisines ?? [];
     const categories = req.categories ?? [];
     const goals = req.goals ?? [];
-    // Lunch/dinner dishes go on the meal plan; breakfast, dessert and snacks keep their own category.
-    const mainMeal = !meals.length || meals.some(isMainMeal);
     const mealWord = (m: MealFilter) => (m === "snack" ? "a snack or appetizer" : mealLabel(m).toLowerCase());
     const forWhat = meals.length ? meals.map(mealWord).join(" or ") : "lunch or dinner";
     const anyOf = (xs: string[]) => (xs.length > 1 ? `any of ${xs.join(", ")} (mix them up)` : xs[0]);
     const style = req.style ?? "home";
-    const regions = style === "takeout" ? [] : pickRegions(cuisines);
-    const lines = [
-      `Suggest ${req.count} distinct recipes for ${forWhat}. Cooking for: ${this.household}.`,
-      meals.length > 1 ? "Spread the recipes across those meals." : "",
-      req.mood ? `They're in the mood for: "${req.mood}".` : "",
-      cuisines.length ? `Cuisine: ${anyOf(cuisines)}.` : "",
-      regions.length
-        ? `For this batch, focus mostly on ${regions.join(" and ")}, with at most a couple of dishes from elsewhere in the cuisine.`
-        : cuisines.length
-          ? "Vary the regions the dishes come from."
-          : "",
+    const regions = req.regions ?? (style === "takeout" ? [] : pickRegions(cuisines));
+    return [
+      req.only?.length
+        ? `Write a recipe for each of these dishes, exactly as named: ${req.only.map((d) => [d.name, d.nativeName, d.region && `(${d.region})`].filter(Boolean).join(" ")).join("; ")}. Cooking for: ${this.household}.`
+        : `Suggest ${req.count} distinct ${what} for ${forWhat}. Cooking for: ${this.household}.`,
+      meals.length > 1 && !req.only?.length ? "Spread them across those meals." : "",
+      req.mood && !req.only?.length ? `They're in the mood for: "${req.mood}".` : "",
+      cuisines.length && !req.only?.length ? `Cuisine: ${anyOf(cuisines)}.` : "",
+      req.only?.length
+        ? ""
+        : regions.length
+          ? `For this batch, focus mostly on ${regions.join(" and ")}, with at most a couple of dishes from elsewhere in the cuisine.`
+          : cuisines.length
+            ? "Vary the regions the dishes come from."
+            : "",
       stylePrompt(style),
-      style === "home"
+      style === "home" && !req.only?.length
         ? "Skip the handful of dishes every Western menu already has; lean toward what a family there would cook on an ordinary day, plus a few beloved regional specialties."
         : "",
-      categories.length ? `Type of dish: ${anyOf(categories)}.` : "",
+      categories.length && !req.only?.length ? `Type of dish: ${anyOf(categories)}.` : "",
       req.dietary?.length
-        ? `Every recipe MUST be ${req.dietary.map(dietLabel).join(", ")}. Check every ingredient, including sauces, stocks and garnishes.`
+        ? `Every dish MUST be ${req.dietary.map(dietLabel).join(", ")}. Check every ingredient, including sauces, stocks and garnishes.`
         : "",
       goals.length
         ? goals.length === 1
-          ? `Every recipe should be ${goalPrompt(goals[0]!)}. Keep the nutrition estimates honest.`
-          : `Every recipe should meet at least one of: ${goals.map(goalPrompt).join("; ")}. Keep the nutrition estimates honest.`
+          ? `Every dish should be ${goalPrompt(goals[0]!)}. Keep the nutrition estimates honest.`
+          : `Every dish should meet at least one of: ${goals.map(goalPrompt).join("; ")}. Keep the nutrition estimates honest.`
         : "",
       req.onHand?.length
         ? `Build around ingredients they already have on hand: ${req.onHand.slice(0, 80).join(", ")}. ` +
-          `Each recipe should need at most ${req.leniency} ingredients they don't have (not counting salt, pepper, oil, water).`
+          `Each dish should need at most ${req.leniency} ingredients they don't have (not counting salt, pepper, oil, water).`
         : "",
       // Their saved recipes hint at taste, but they'd pull a cuisine search toward whatever is already in the book.
-      req.bookSample.length && !cuisines.length
+      req.bookSample.length && !cuisines.length && !req.only?.length
         ? `Dishes they already like (for taste, don't repeat these): ${req.bookSample.slice(0, 40).join("; ")}.`
         : "",
-      req.avoid.length ? `Do not suggest any of these: ${req.avoid.slice(0, 120).join("; ")}.` : "",
-      "Make the recipes varied from each other. Write ingredient lines with US measurements, naming specialty ingredients precisely (e.g. 'Pixian doubanjiang', 'Shaoxing wine').",
+      req.avoid.length && !req.only?.length ? `Do not suggest any of these: ${req.avoid.slice(0, 120).join("; ")}.` : "",
     ].filter(Boolean);
+  }
+
+  /**
+   * Dish names only, with aliases for finding real recipe pages. A short reply (a few hundred tokens
+   * for 25 dishes), cached by the caller and dealt from over many decks.
+   */
+  async dishNames(req: AiRequest): Promise<DishIdea[]> {
+    const lines = [
+      ...this.brief(req, "dishes"),
+      "Only names: no recipes. Pick dishes that good recipe websites are likely to have, and give the names those sites would use.",
+    ];
+    const res = await this.client.messages.create({
+      model: this.model,
+      max_tokens: 4000,
+      tools: [NAMES_TOOL],
+      tool_choice: { type: "tool", name: NAMES_TOOL.name },
+      messages: [{ role: "user", content: lines.join("\n") }],
+    });
+    const block = res.content.find((b) => b.type === "tool_use");
+    if (!block || block.type !== "tool_use") throw new Error("AI did not return dishes");
+    const raw = (block.input as { dishes?: Partial<DishIdea>[] }).dishes ?? [];
+    return raw
+      .filter((d): d is Partial<DishIdea> & { name: string } => typeof d?.name === "string" && !!d.name.trim())
+      .map((d) => ({
+        name: d.name.trim(),
+        nativeName: d.nativeName?.trim() || undefined,
+        aliases: [...new Set([d.name.trim(), ...(Array.isArray(d.aliases) ? d.aliases : [])].map((a) => String(a).trim()).filter(Boolean))],
+        region: d.region?.trim() || undefined,
+        cuisine: d.cuisine?.trim() || undefined,
+        suits: (Array.isArray(d.suits) ? d.suits : []).filter((x): x is MealType => x === "lunch" || x === "dinner"),
+        wikipediaTitle: d.wikipediaTitle?.trim() || undefined,
+      }));
+  }
+
+  async generate(req: AiRequest): Promise<AiCard[]> {
+    const meals = req.meals ?? [];
+    // Lunch/dinner dishes go on the meal plan; breakfast, dessert and snacks keep their own category.
+    const mainMeal = !meals.length || meals.some(isMainMeal);
+    const lines = [
+      ...this.brief(req, "recipes"),
+      "Make the recipes varied from each other. Write ingredient lines with US measurements, naming specialty ingredients precisely (e.g. 'Pixian doubanjiang', 'Shaoxing wine').",
+    ];
 
     const res = await this.client.messages.create({
       model: this.model,

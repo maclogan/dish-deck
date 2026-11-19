@@ -175,6 +175,17 @@ export class MealieClient {
     });
   }
 
+  /** Import a recipe from a web page with Mealie's own scraper; returns the new slug. */
+  async createFromUrl(url: string): Promise<string> {
+    const res = await this.req<string>("POST", "/recipes/create/url", { body: { url, includeTags: false } });
+    return String(res).replace(/^"|"$/g, "");
+  }
+
+  /** Run Mealie's scraper on a page without saving anything (for pages without schema.org data). */
+  async testScrape(url: string): Promise<unknown> {
+    return this.req<unknown>("POST", "/recipes/test-scrape-url", { body: { url } });
+  }
+
   async setImageFromUrl(slug: string, imageUrl: string): Promise<void> {
     await this.req("POST", `/recipes/${encodeURIComponent(slug)}/image`, { body: { url: imageUrl } });
   }

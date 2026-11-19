@@ -1,6 +1,7 @@
 // Finds a real photo for a dish that doesn't come with one (AI ideas, Mealie recipes without a picture).
 // Wikipedia first (free, no key, good for named dishes), then Pexels when PEXELS_API_KEY is set.
 
+import type { Store } from "../store.js";
 import { normalize } from "../util.js";
 
 export interface Photo {
@@ -43,7 +44,15 @@ export class PhotoFinder {
   private inflight = new Map<string, Promise<Photo | undefined>>();
 
   constructor(
-    private opts: { wikipediaApi: string; pexelsKey?: string; pexelsApi?: string; fetch?: Fetch; warn?: (msg: string) => void },
+    private opts: {
+      wikipediaApi: string;
+      pexelsKey?: string;
+      pexelsApi?: string;
+      fetch?: Fetch;
+      warn?: (msg: string) => void;
+      /** Keeps lookups between restarts (otherwise they're cached in memory only). */
+      store?: Store;
+    },
   ) {}
 
   private get fetch(): Fetch {
@@ -56,6 +65,11 @@ export class PhotoFinder {
     if (!key) return undefined;
     const hit = this.cache.get(key);
     if (hit && Date.now() - hit.at < (hit.photo ? HIT_TTL : MISS_TTL)) return hit.photo ?? undefined;
+    const saved = this.opts.store?.getPhoto<Photo>(key, HIT_TTL, MISS_TTL);
+    if (saved) {
+      this.cache.set(key, { at: Date.now(), photo: saved.value });
+      return saved.value ?? undefined;
+    }
     const running = this.inflight.get(key);
     if (running) return running;
     const job = this.lookup(q)
@@ -65,6 +79,7 @@ export class PhotoFinder {
       })
       .then((photo) => {
         this.cache.set(key, { at: Date.now(), photo: photo ?? null });
+        this.opts.store?.putPhoto(key, photo ?? null);
         this.inflight.delete(key);
         return photo;
       });
