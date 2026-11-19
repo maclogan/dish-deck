@@ -17,6 +17,10 @@ export interface Config {
   anthropicModel: string;
   /** Short description of the household, used in AI prompts. */
   householdContext: string;
+  /** MediaWiki API used to find photos for dishes that don't come with one. */
+  wikipediaApiUrl: string;
+  /** Optional Pexels key: stock food photos when Wikipedia has none. */
+  pexelsApiKey?: string;
   mealdbKey: string;
   /** Override for TheMealDB's base URL (testing or a mirror). */
   mealdbBaseUrl: string;
@@ -111,7 +115,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   if (!mealieToken) problems.push("MEALIE_TOKEN is required (Mealie > your profile > API Tokens)");
   else if (/\s/.test(mealieToken)) problems.push("MEALIE_TOKEN contains spaces or line breaks; paste it again as one line");
-  for (const name of ["MEALIE_PUBLIC_URL", "MEALDB_BASE_URL"]) {
+  for (const name of ["MEALIE_PUBLIC_URL", "MEALDB_BASE_URL", "WIKIPEDIA_API_URL"]) {
     const v = get(name);
     const p = v ? urlProblem(name, v) : undefined;
     if (p) problems.push(p);
@@ -147,6 +151,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     anthropicApiKey: get("ANTHROPIC_API_KEY"),
     anthropicModel: get("ANTHROPIC_MODEL") ?? "claude-haiku-5-5",
     householdContext: get("HOUSEHOLD_CONTEXT") ?? "a busy family",
+    wikipediaApiUrl: get("WIKIPEDIA_API_URL") ?? "https://en.wikipedia.org/w/api.php",
+    pexelsApiKey: get("PEXELS_API_KEY"),
     mealdbKey: get("MEALDB_API_KEY") ?? "1",
     mealdbBaseUrl: get("MEALDB_BASE_URL") ?? "https://www.themealdb.com",
     timezone,

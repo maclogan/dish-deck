@@ -1,4 +1,4 @@
-import { MultiPills } from "./ChipRow";
+import { ChipRow, MultiPills } from "./ChipRow";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import {
   api,
@@ -11,6 +11,7 @@ import {
   type MealFilter,
   type MealType,
   type PlanDay,
+  type StyleId,
 } from "../api";
 import { IconRefresh, IconSearch, IconSliders, IconSparkle } from "../icons";
 import { Deck, type Action } from "./Deck";
@@ -26,6 +27,8 @@ interface Prefs {
   leniency: number;
   /** Dietary restrictions and allergies stick around between visits. */
   dietary: DietId[];
+  /** So does the style. */
+  style: StyleId;
 }
 
 function loadPrefs(): Prefs {
@@ -36,9 +39,10 @@ function loadPrefs(): Prefs {
       onHand: !!p.onHand,
       leniency: Number.isFinite(p.leniency) ? p.leniency : 2,
       dietary: Array.isArray(p.dietary) ? p.dietary.filter((d: unknown) => typeof d === "string") : [],
+      style: p.style === "weeknight" || p.style === "takeout" ? p.style : "home",
     };
   } catch {
-    return { source: "new", onHand: false, leniency: 2, dietary: [] };
+    return { source: "new", onHand: false, leniency: 2, dietary: [], style: "home" };
   }
 }
 
@@ -51,6 +55,7 @@ interface Filters {
   meals: MealFilter[];
   dietary: DietId[];
   goals: GoalId[];
+  style: StyleId;
   onHand: boolean;
   leniency: number;
 }
@@ -84,6 +89,7 @@ export function Discover(props: {
   const [meals, setMeals] = useState<MealFilter[]>([]);
   const [dietary, setDietary] = useState<DietId[]>(initial.dietary);
   const [goals, setGoals] = useState<GoalId[]>([]);
+  const [style, setStyle] = useState<StyleId>(initial.style);
   const [showFilters, setShowFilters] = useState(false);
   // TheMealDB has no nutrition data: on "New ideas", goals only work with AI.
   const goalsAvailable = source === "saved" || props.aiOn;
@@ -104,13 +110,13 @@ export function Discover(props: {
   const requestId = useRef(0);
 
   useEffect(() => {
-    storageSet("dishdeck.prefs", JSON.stringify({ source, onHand, leniency, dietary }));
-  }, [source, onHand, leniency, dietary.join()]);
+    storageSet("dishdeck.prefs", JSON.stringify({ source, onHand, leniency, dietary, style }));
+  }, [source, onHand, leniency, dietary.join(), style]);
 
   // The panel edits these (the "draft"); deals use `applied`, which catches up when the panel closes.
   const draft: Filters = useMemo(
-    () => ({ cuisines, categories, meals, dietary, goals, onHand, leniency }),
-    [cuisines.join(), categories.join(), meals.join(), dietary.join(), goals.join(), onHand, leniency],
+    () => ({ cuisines, categories, meals, dietary, goals, style, onHand, leniency }),
+    [cuisines.join(), categories.join(), meals.join(), dietary.join(), goals.join(), style, onHand, leniency],
   );
   const draftKey = JSON.stringify(draft);
   const [applied, setApplied] = useState<Filters>(draft);
@@ -144,6 +150,7 @@ export function Discover(props: {
         dietary: f.dietary,
         // Goals stay picked while AI is off; they just can't be checked without it.
         goals: goalsAvailable ? f.goals : [],
+        style: f.style,
         onHand: f.onHand,
         leniency: f.leniency,
         count: 8,
@@ -173,8 +180,8 @@ export function Discover(props: {
 
   // First deal, and a fresh deck when the applied filters change. "Our recipes" shows the grid instead.
   // Flipping the AI toggle keeps the current card and refills the rest, but only when it changes where
-  // ideas come from: a typed craving or nutrition goals, or AI cards already in the deck (from the
-  // fallback when TheMealDB had nothing). Plain browsing is TheMealDB either way.
+  // ideas come from: a typed craving, a cuisine or nutrition goals, or AI cards already in the deck (from
+  // the fallback when TheMealDB had nothing). Plain browsing is TheMealDB either way.
   const lastDeal = useRef<{ source: Source; aiOn: boolean } | null>(null);
   useEffect(() => {
     const prev = lastDeal.current;
@@ -182,7 +189,8 @@ export function Discover(props: {
     if (source === "saved") return;
     const aiFlipped = !!prev && prev.source === source && prev.aiOn !== props.aiOn;
     if (!aiFlipped) return void deal("replace");
-    const matters = !!mood.trim() || applied.goals.length > 0 || cardsRef.current.some((c) => c.source === "ai");
+    const matters =
+      !!mood.trim() || applied.goals.length > 0 || applied.cuisines.length > 0 || cardsRef.current.some((c) => c.source === "ai");
     if (matters) deal(cardsRef.current.length > 0 ? "keepTop" : "replace");
   }, [source, appliedKey, props.aiOn]);
 
@@ -249,8 +257,9 @@ export function Discover(props: {
   };
 
   const filterCount =
-    cuisines.length + categories.length + (onHand ? 1 : 0) + meals.length + dietary.length + activeGoals.length;
-  const willUseAi = props.aiOn && source === "new" && (mood.trim().length > 0 || activeGoals.length > 0);
+    cuisines.length + categories.length + (onHand ? 1 : 0) + meals.length + dietary.length + activeGoals.length +
+    (props.aiOn && style !== "home" ? 1 : 0);
+  const willUseAi = props.aiOn && source === "new" && (mood.trim().length > 0 || activeGoals.length > 0 || applied.cuisines.length > 0);
   const loadingText = willUseAi ? "Cooking up AI ideas…" : "Shuffling the deck…";
   // These TheMealDB categories are covered by the Meal and Dietary filters.
   const types = config.categories.filter((c) => !COVERED_CATEGORIES.has(c.toLowerCase()));
@@ -330,10 +339,30 @@ export function Discover(props: {
                 Nutrition <span class="filter-hint">{goalsAvailable ? "pick any" : "Needs AI ideas"}</span>
               </div>
               <MultiPills options={config.goals} selected={goals} onChange={setGoals} disabled={!goalsAvailable} />
+              {props.aiOn && config.styles?.length > 0 && (
+                <>
+                  <div class="filter-label">
+                    Style <span class="filter-hint">for AI ideas</span>
+                  </div>
+                  <ChipRow>
+                    {config.styles.map((o) => (
+                      <button
+                        key={o.id}
+                        type="button"
+                        class={`pill ${style === o.id ? "on" : ""}`}
+                        aria-pressed={style === o.id}
+                        onClick={() => setStyle(o.id)}
+                      >
+                        {o.label}
+                      </button>
+                    ))}
+                  </ChipRow>
+                </>
+              )}
               {config.cuisines.length > 0 && (
                 <>
                   <div class="filter-label">
-                    Cuisine <span class="filter-hint">pick any</span>
+                    Cuisine <span class="filter-hint">{props.aiOn ? "pick any · uses AI" : "pick any"}</span>
                   </div>
                   <MultiPills options={config.cuisines} selected={cuisines} onChange={setCuisines} limit={15} />
                 </>

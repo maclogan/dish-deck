@@ -22,9 +22,16 @@ export function DetailSheet(props: {
         <div class="detail">
           <div class="detail-image">
             <RecipeImage card={card} lazy={false} />
+            {card.imageCredit && (
+              <a class="photo-credit" href={card.imageCredit.url} target="_blank" rel="noreferrer">
+                {card.imageCredit.text}
+              </a>
+            )}
           </div>
+          {card.nativeName && <p class="native-name" lang="und">{card.nativeName}</p>}
           <div class="chips">
             {card.cuisine && <span class="chip">{card.cuisine}</span>}
+            {card.region && card.region !== card.cuisine && <span class="chip">{card.region}</span>}
             {card.category && <span class="chip">{card.category}</span>}
             {card.totalMinutes ? <span class="chip">{card.totalMinutes} min</span> : null}
             {card.servings ? <span class="chip">Serves {card.servings}</span> : null}
