@@ -4,6 +4,7 @@
 
 import Fastify from "fastify";
 
+const ALL_AREAS = ["Algerian", "American", "Argentinian", "Australian", "British", "Canadian", "Chinese", "Croatian", "Dutch", "Egyptian", "Filipino", "French", "Greek", "Indian", "Irish", "Italian", "Jamaican", "Japanese", "Kenyan", "Malaysian", "Mexican", "Moroccan", "Norwegian", "Polish", "Portuguese", "Russian", "Saudi Arabian", "Slovakian", "Spanish", "Syrian", "Thai", "Tunisian", "Turkish", "Ukrainian", "Uruguayan", "Venezulan", "Vietnamese"];
 const app = Fastify();
 let nextRecipe = 1;
 let nextPlan = 1;
@@ -36,6 +37,14 @@ type Recipe = {
   tags: { name: string }[]; recipeCategory: { name: string }[];
   recipeIngredient: { display: string }[]; recipeInstructions: { text: string }[];
   dateUpdated: string;
+  /** Mealie: dateAdded is just the day; createdAt is the full timestamp. */
+  dateAdded: string;
+  createdAt: string;
+};
+
+const savedStamp = (n: number) => {
+  const t = new Date(Date.UTC(2026, 10, 1 + Math.floor(n / 3), 18, n * 7 % 60, 0));
+  return { dateAdded: t.toISOString().slice(0, 10), createdAt: t.toISOString().replace("Z", "") };
 };
 
 const mk = (name: string, opts: Partial<Recipe> & { ing: string[]; cat?: string; mins?: number; serves?: number; tags?: string[] }): Recipe => {
@@ -54,6 +63,8 @@ const mk = (name: string, opts: Partial<Recipe> & { ing: string[]; cat?: string;
     recipeIngredient: opts.ing.map((d) => ({ display: d })),
     recipeInstructions: [{ text: "Prep the ingredients." }, { text: "Cook until done." }, { text: "Serve warm." }],
     dateUpdated: "2026-11-01T00:00:00",
+    // Several recipes saved on the same day, a few minutes apart (the newest-saved sort has to tell them apart).
+    ...savedStamp(n),
   };
 };
 
@@ -127,6 +138,9 @@ app.post<{ Body: { data: string } }>("/api/recipes/create/html-or-json", async (
   const schema = JSON.parse(req.body.data);
   const r = mk(schema.name, { ing: schema.recipeIngredient ?? [], tags: String(schema.keywords ?? "").split(",").map((s: string) => s.trim()).filter(Boolean) });
   r.image = null;
+  const now = new Date();
+  r.createdAt = now.toISOString().replace("Z", "");
+  r.dateAdded = now.toISOString().slice(0, 10);
   recipes.push(r);
   return reply.code(201).send(JSON.stringify(r.slug));
 });
@@ -198,7 +212,8 @@ app.get<{ Params: { file: string }; Querystring: Record<string, string> }>("/api
       return { meals: hits.length ? hits.map((m) => ({ idMeal: m.idMeal, strMeal: m.strMeal, strMealThumb: m.strMealThumb })) : null };
     }
     case "list.php":
-      if (q.a) return { meals: [...new Set(meals.map((m) => m.strArea))].sort().map((strArea) => ({ strArea })) };
+      // TheMealDB's real area list is long; mirror it so the cuisine picker looks like production.
+      if (q.a) return { meals: [...new Set([...meals.map((m) => m.strArea!), ...ALL_AREAS])].sort().map((strArea) => ({ strArea })) };
       return { meals: [...new Set(meals.map((m) => m.strCategory))].sort().map((strCategory) => ({ strCategory })) };
     default:
       return { meals: null };
@@ -207,6 +222,30 @@ app.get<{ Params: { file: string }; Querystring: Record<string, string> }>("/api
 app.get<{ Params: { id: string } }>("/img/:id", async (req, reply) => {
   const id = Number(req.params.id.replace(".svg", ""));
   return reply.type("image/svg+xml").send(svg(id, ""));
+});
+
+// ---------------------------------------------------------------- fake Claude (Messages API)
+// Start the app with ANTHROPIC_API_KEY=dev ANTHROPIC_BASE_URL=http://localhost:9100 to try AI mode offline.
+const AI_DISHES = ["Miso Butter Salmon", "Lemongrass Chicken Bowls", "Smoky Black Bean Chili", "Gochujang Pork Tacos", "Coconut Lentil Soup", "Herby Orzo Skillet", "Crispy Gnocchi Bake", "Ginger Scallion Noodles", "Chipotle Turkey Burgers", "Saag Paneer Wraps", "Harissa Chickpea Stew", "Peanut Tofu Stir-fry"];
+let aiCursor = 0;
+app.post<{ Body: { messages: { content: string }[] } }>("/v1/messages", async (req) => {
+  await new Promise((r) => setTimeout(r, 1500));
+  const prompt = req.body.messages[0]?.content ?? "";
+  const want = Number(/Suggest (\d+)/.exec(prompt)?.[1] ?? 6);
+  const recipes = Array.from({ length: want }, () => {
+    const title = `${AI_DISHES[aiCursor % AI_DISHES.length]}${aiCursor >= AI_DISHES.length ? ` ${Math.floor(aiCursor / AI_DISHES.length) + 1}` : ""}`;
+    aiCursor++;
+    return {
+      title, description: "A quick, cozy weeknight idea.", cuisine: "Fusion", category: "Dinner", suits: ["dinner", "lunch"], servings: 4,
+      prepMinutes: 10, cookMinutes: 20, ingredients: ["1 lb chicken thighs", "2 cups rice", "1 onion"], instructions: ["Prep.", "Cook.", "Serve."],
+      tags: ["weeknight"], nutrition: { calories: 520, protein: 34, carbs: 48, fat: 18, fiber: 5 },
+    };
+  });
+  return {
+    id: "msg_mock", type: "message", role: "assistant", model: "mock", stop_reason: "tool_use", stop_sequence: null,
+    usage: { input_tokens: 1, output_tokens: 1 },
+    content: [{ type: "tool_use", id: "toolu_mock", name: "suggest_recipes", input: { recipes } }],
+  };
 });
 
 app.listen({ port: 9100, host: "0.0.0.0" }).then(() => console.log("mock Mealie + TheMealDB on :9100"));

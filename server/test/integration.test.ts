@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildApp } from "../src/app.js";
+import { buildApp, rankCuisines } from "../src/app.js";
 import type { Config } from "../src/config.js";
 import { MealieClient, type MealiePlanEntry, type MealieRecipe } from "../src/mealie.js";
 import { Service, imageSig } from "../src/service.js";
@@ -157,6 +157,61 @@ describe("deck", () => {
     expect(warnings[0]).toMatch(/529 overloaded/);
   });
 
+  describe("AI ideas", () => {
+    const fakeAi = () => {
+      const asked: { mood?: string; avoid: string[] }[] = [];
+      const ai = {
+        generate: async (req: { mood?: string; avoid: string[] }) => {
+          asked.push(req);
+          return [{ key: "ai:miso-glazed-cod", source: "ai", title: "Miso Glazed Cod", tags: [], ingredients: ["2 cod fillets"], instructions: ["Bake."], suits: ["dinner"] }];
+        },
+      } as unknown as AiRecipes;
+      return { ai, asked };
+    };
+    const withAi = (ai: AiRecipes, mealdb = fakeMealDb()) => {
+      const m = fakeMealie();
+      return new Service({ config, mealie: new MealieClient(config.mealieUrl, config.mealieToken, m.fetchImpl), mealdb, ai });
+    };
+
+    it("browses TheMealDB without a search, even with AI on", async () => {
+      const { ai, asked } = fakeAi();
+      const res = await withAi(ai).deck({ source: "new", onHand: false, leniency: 2, count: 4, exclude: [] });
+      expect(res.cards.map((c) => c.source)).toEqual(["mealdb"]);
+      expect(asked).toHaveLength(0);
+    });
+
+    it("uses AI for a typed craving, without repeating ideas already dealt", async () => {
+      const { ai, asked } = fakeAi();
+      const res = await withAi(ai).deck({ source: "new", mood: "flaky fish", onHand: false, leniency: 2, count: 4, exclude: ["ai:sesame-noodles", "mealdb:1"] });
+      expect(res.cards.map((c) => c.source)).toEqual(["ai"]);
+      expect(asked[0]!.avoid[0]).toBe("sesame noodles");
+      expect(asked[0]!.avoid).toContain("Beef Tacos");
+    });
+
+    it("fills the deck with AI when TheMealDB has nothing new", async () => {
+      const { ai, asked } = fakeAi();
+      // The fake TheMealDB only knows one dish; once it's been dealt there's nothing left.
+      const res = await withAi(ai).deck({ source: "new", onHand: false, leniency: 2, count: 4, exclude: ["mealdb:52772"] });
+      expect(res.cards.map((c) => c.title)).toEqual(["Miso Glazed Cod"]);
+      expect(res.note).toMatch(/TheMealDB had nothing new for this, so here are AI ideas/);
+      expect(asked[0]!.mood).toBeUndefined();
+    });
+
+    it("fills the deck with AI when TheMealDB is down", async () => {
+      const { ai } = fakeAi();
+      const down = { candidates: async () => { throw new Error("fetch failed"); } } as unknown as MealDb;
+      const res = await withAi(ai, down).deck({ source: "new", onHand: false, leniency: 2, count: 4, exclude: [] });
+      expect(res.cards.map((c) => c.source)).toEqual(["ai"]);
+    });
+
+    it("leaves the deck empty when TheMealDB has nothing and AI is off", async () => {
+      const { ai, asked } = fakeAi();
+      const res = await withAi(ai).deck({ source: "new", ai: false, onHand: false, leniency: 2, count: 4, exclude: ["mealdb:52772"] });
+      expect(res.cards).toEqual([]);
+      expect(asked).toHaveLength(0);
+    });
+  });
+
   it("takes several cuisines as any of them", async () => {
     const { service } = setup();
     // The fake returns the same casserole for every cuisine, so the union should hold it once.
@@ -244,6 +299,21 @@ describe("recipe book", () => {
     expect(byTitle("Beef Tacos").fits.diets).not.toContain("gluten-free");
     expect(byTitle("Greek Salad").fits.meals).toContain("lunch");
     expect(byTitle("Greek Salad").fits.meals).not.toContain("dessert");
+  });
+
+  it("dates recipes by when they were saved, to the second", async () => {
+    const m = fakeMealie();
+    m.recipes.push(
+      mealieRecipe({ name: "Saved Earlier", dateAdded: "2026-11-18", createdAt: "2026-11-18T09:15:00" }),
+      mealieRecipe({ name: "Saved Later", dateAdded: "2026-11-18", createdAt: "2026-11-18T21:40:00" }),
+      mealieRecipe({ name: "Old Import", dateAdded: "2026-10-02" }),
+    );
+    const service = new Service({ config, mealie: new MealieClient(config.mealieUrl, config.mealieToken, m.fetchImpl), mealdb: fakeMealDb() });
+    const { recipes } = await service.book();
+    const at = (t: string) => recipes.find((r) => r.title === t)!.addedAt;
+    expect(at("Saved Later")).toBe("2026-11-18T21:40:00");
+    expect(at("Saved Earlier")).toBe("2026-11-18T09:15:00");
+    expect(at("Old Import")).toBe("2026-10-02");
   });
 
   it("signs image URLs only when a passcode is set", async () => {
@@ -349,5 +419,13 @@ describe("HTTP API", () => {
     const signed = await app.inject({ method: "GET", url: `/api/mealie-image/${id}?v=abc&sig=${imageSig("secret", id)}` });
     expect(signed.statusCode).toBe(400);
     await app.close();
+  });
+});
+
+describe("cuisine list", () => {
+  it("puts the most-cooked cuisines first, then the rest A–Z", () => {
+    expect(rankCuisines(["Uruguayan", "Thai", "Italian", "Croatian", "Mexican", "Algerian"])).toEqual([
+      "Italian", "Mexican", "Thai", "Algerian", "Croatian", "Uruguayan",
+    ]);
   });
 });

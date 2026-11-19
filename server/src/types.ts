@@ -94,7 +94,7 @@ export interface BookRecipe extends Card {
   /** Which dietary, meal and nutrition filters this recipe passes. */
   fits: { diets: DietId[]; meals: MealFilter[]; goals: GoalId[] };
   rating?: number;
-  /** ISO date the recipe was added to Mealie, when known. */
+  /** When the recipe was saved to Mealie (ISO timestamp, or just the date on older data), when known. */
   addedAt?: string;
 }
 

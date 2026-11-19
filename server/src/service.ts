@@ -146,7 +146,8 @@ export class Service {
           goals: GOAL_IDS.filter((g) => fitsGoals(card, [g])),
         },
         rating: r.rating ?? undefined,
-        addedAt: r.dateAdded ?? r.createdAt ?? undefined,
+        // createdAt is a full timestamp; dateAdded is only the day, so it can't order same-day saves.
+        addedAt: r.createdAt ?? r.dateAdded ?? undefined,
       };
     });
     return { recipes };
@@ -234,14 +235,13 @@ export class Service {
     const dietary = req.dietary ?? [];
     const goals = req.goals ?? [];
     const mood = req.mood?.trim();
-    // Nutrition goals can only be checked with AI estimates, so they also trigger AI ideas.
-    const useAi = !!this.deps.ai && req.ai !== false && (!!mood || goals.length > 0);
+    const aiAllowed = !!this.deps.ai && req.ai !== false;
+    // AI is for a typed craving or nutrition goals (only AI can estimate nutrition); plain browsing
+    // uses TheMealDB, which is free. AI also steps in when TheMealDB has nothing for these filters.
+    const aiFirst = aiAllowed && (!!mood || goals.length > 0);
 
-    let cards: Card[] | undefined;
-    let note = "";
-    let aiFailed = false;
-
-    if (useAi) {
+    /** Ask Claude; undefined if it fails or nothing it returns passes the filters. */
+    const aiIdeas = async (): Promise<Card[] | undefined> => {
       try {
         const generated = await this.deps.ai!.generate({
           mood,
@@ -253,27 +253,53 @@ export class Service {
           count: Math.max(req.count, 6),
           onHand: onHand?.matcher.names,
           leniency: req.leniency,
-          avoid: [...book.map((r) => r.name)],
+          // AI ideas already dealt this session (their keys are slugs of the title) first, then saved recipes.
+          avoid: [...req.exclude.filter((k) => k.startsWith("ai:")).map((k) => k.slice(3).replace(/-/g, " ")).reverse(), ...book.map((r) => r.name)],
           bookSample: book.map((r) => r.name),
         });
         if (!generated.length) throw new Error("AI returned no recipes");
         // Double-check the model's work: drop anything that breaks a restriction or misses a goal.
         const fit = generated.filter((c) => fitsDiet(c.ingredients, dietary) && fitsGoals(c, goals));
         if (!fit.length) throw new Error("none of the AI recipes met the filters");
-        cards = fit;
-        note = (mood ? `AI ideas for "${mood}"` : "AI ideas") + filterSuffix(req);
+        return fit;
       } catch (err) {
-        // Any Anthropic/API/parse failure: fall back to TheMealDB rather than failing the deal.
-        aiFailed = true;
-        this.deps.warn?.(`AI ideas failed, falling back to TheMealDB: ${err instanceof Error ? err.message : String(err)}`);
+        // Any Anthropic/API/parse failure: carry on without AI rather than failing the deal.
+        this.deps.warn?.(`AI ideas failed: ${err instanceof Error ? err.message : String(err)}`);
+        return undefined;
+      }
+    };
+
+    /** Drop repeats and saved dishes, then apply the on-hand check. */
+    const finish = (list: Card[]): { cards: Card[]; suffix: string } => {
+      let cards = list.filter((c) => !seen.has(c.key) && !bookNames.has(normalize(c.title)));
+      let suffix = "";
+      if (onHand) {
+        for (const c of cards) c.onHand = onHand.matcher.check(c.ingredients);
+        const fits = cards.filter((c) => (c.onHand?.missing.length ?? 0) <= req.leniency);
+        // If nothing fits the leniency, still show the closest matches rather than an empty deck.
+        cards = (fits.length ? fits : cards).sort((a, b) => a.onHand!.missing.length - b.onHand!.missing.length);
+        if (!fits.length && cards.length) suffix = ` (nothing within ${req.leniency} missing; closest matches first)`;
+      }
+      return { cards, suffix };
+    };
+    const aiNote = () => (mood ? `AI ideas for "${mood}"` : "AI ideas") + filterSuffix(req);
+
+    if (aiFirst) {
+      const ai = await aiIdeas();
+      if (ai) {
+        const done = finish(ai);
+        if (done.cards.length) return { cards: done.cards.slice(0, req.count), note: aiNote() + done.suffix };
       }
     }
 
-    if (!cards) {
-      const strict = dietary.length > 0 || req.meals.length > 0;
-      const want = Math.min(req.count * (req.onHand ? 3 : 2) * (strict ? 2 : 1), 48);
-      const mealCats = mealDbCategoriesForMeals(req.meals);
-      const dietCat = mealDbCategoryForDiet(dietary);
+    // TheMealDB.
+    const strict = dietary.length > 0 || req.meals.length > 0;
+    const want = Math.min(req.count * (req.onHand ? 3 : 2) * (strict ? 2 : 1), 48);
+    const mealCats = mealDbCategoriesForMeals(req.meals);
+    const dietCat = mealDbCategoryForDiet(dietary);
+    let note = "";
+    let mealDbCards: Card[] = [];
+    try {
       const found = await this.deps.mealdb.candidates({
         cuisines: req.cuisines,
         categories: req.categories,
@@ -283,26 +309,31 @@ export class Service {
       });
       note = found.note + filterSuffix({ ...req, goals: [] });
       if (goals.length) note += ` (nutrition goals need AI ideas, so they weren't applied)`;
-      if (aiFailed) note = `Couldn't get AI ideas this time; showing TheMealDB results. ${note}`.trim();
+      if (aiFirst) note = `Couldn't get AI ideas this time; showing TheMealDB results. ${note}`.trim();
       const refs = found.refs.filter((r) => !seen.has(`mealdb:${r.id}`)).slice(0, want);
       const meals = await mapLimit(refs, 4, async (r) => r.meal ?? (await this.deps.mealdb.lookup(r.id)));
-      cards = meals
+      mealDbCards = meals
         .filter((m) => !!m)
         .map((m) => mealDbToCard(m!))
         .filter((c) => fitsDiet(c.ingredients, dietary) && fitsMeal(c, req.meals));
+    } catch (err) {
+      // TheMealDB is unreachable: fall through to AI when it's available, otherwise report the error.
+      if (!aiAllowed || aiFirst) throw err;
+      this.deps.warn?.(`TheMealDB failed: ${err instanceof Error ? err.message : String(err)}`);
     }
+    const done = finish(mealDbCards);
+    if (done.cards.length || !aiAllowed || aiFirst) return { cards: done.cards.slice(0, req.count), note: note + done.suffix };
 
-    cards = cards.filter((c) => !seen.has(c.key) && !bookNames.has(normalize(c.title)));
-
-    if (onHand) {
-      for (const c of cards) c.onHand = onHand.matcher.check(c.ingredients);
-      const fits = cards.filter((c) => (c.onHand?.missing.length ?? 0) <= req.leniency);
-      // If nothing fits the leniency, still show the closest matches rather than an empty deck.
-      cards = (fits.length ? fits : cards).sort((a, b) => (a.onHand!.missing.length - b.onHand!.missing.length));
-      if (!fits.length && cards.length) note += ` (nothing within ${req.leniency} missing; closest matches first)`;
+    // TheMealDB came up empty (a small catalog, or it's down): let Claude fill the deck instead.
+    const ai = await aiIdeas();
+    const fallback = ai ? finish(ai) : undefined;
+    if (fallback?.cards.length) {
+      return {
+        cards: fallback.cards.slice(0, req.count),
+        note: `TheMealDB had nothing new for this, so here are AI ideas${filterSuffix(req)}${fallback.suffix}`,
+      };
     }
-
-    return { cards: cards.slice(0, req.count), note };
+    return { cards: [], note: note + done.suffix };
   }
 
   // ------------------------------------------------------------------ save

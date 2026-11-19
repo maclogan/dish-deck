@@ -137,7 +137,7 @@ export class AiRecipes {
           `Each recipe should need at most ${req.leniency} ingredients they don't have (not counting salt, pepper, oil, water).`
         : "",
       req.bookSample.length ? `Dishes they already like (for taste, don't repeat these): ${req.bookSample.slice(0, 40).join("; ")}.` : "",
-      req.avoid.length ? `Do not suggest any of these: ${req.avoid.slice(0, 80).join("; ")}.` : "",
+      req.avoid.length ? `Do not suggest any of these: ${req.avoid.slice(0, 120).join("; ")}.` : "",
       "Keep recipes realistic for a home kitchen: common grocery-store ingredients, mostly under an hour, and varied from each other.",
       "Use US measurements.",
     ].filter(Boolean);

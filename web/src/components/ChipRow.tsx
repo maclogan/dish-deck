@@ -77,7 +77,8 @@ export const toggleIn = <T,>(list: T[], item: T) => (list.includes(item) ? list.
 
 /**
  * A scrolling row of multi-select pills. Picking several means "any of these". "Any" (when shown)
- * is on while nothing is picked, and clears the selection.
+ * is on while nothing is picked, and clears the selection. With `limit`, only the first `limit`
+ * options (plus anything picked) show until "More" opens the full list as a wrapping grid.
  */
 export function MultiPills<T extends string>(props: {
   options: readonly (T | { id: T; label: string })[];
@@ -86,19 +87,26 @@ export function MultiPills<T extends string>(props: {
   /** Label for the clear-all pill, or false to leave it out. */
   anyLabel?: string | false;
   disabled?: boolean;
+  /** Show this many options until "More" is tapped (list the most useful first). */
+  limit?: number;
 }) {
-  const { selected, onChange, disabled } = props;
+  const { selected, onChange, disabled, limit } = props;
   const anyLabel = props.anyLabel ?? "Any";
-  return (
-    <ChipRow>
+  const [expanded, setExpanded] = useState(false);
+  const all = props.options.map((o) => (typeof o === "string" ? { id: o, label: o as string } : o));
+  // Not worth hiding just one or two.
+  const collapsible = limit !== undefined && all.length > limit + 2;
+  const shown = !collapsible || expanded ? all : all.filter((o, i) => i < limit! || selected.includes(o.id));
+  const hidden = all.length - shown.length;
+
+  const pills = (
+    <>
       {anyLabel !== false && (
         <button type="button" class={`pill ${selected.length === 0 ? "on" : ""}`} disabled={disabled} onClick={() => onChange([])}>
           {anyLabel}
         </button>
       )}
-      {props.options.map((o) => {
-        const id = typeof o === "string" ? o : o.id;
-        const label = typeof o === "string" ? o : o.label;
+      {shown.map(({ id, label }) => {
         const on = selected.includes(id);
         return (
           <button
@@ -113,6 +121,13 @@ export function MultiPills<T extends string>(props: {
           </button>
         );
       })}
-    </ChipRow>
+      {collapsible && (
+        <button type="button" class="pill more" aria-expanded={expanded} disabled={disabled} onClick={() => setExpanded((v) => !v)}>
+          {expanded ? "Show fewer" : `+${hidden} more`}
+        </button>
+      )}
+    </>
   );
+
+  return expanded ? <div class="chip-wrap">{pills}</div> : <ChipRow>{pills}</ChipRow>;
 }

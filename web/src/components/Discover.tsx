@@ -1,5 +1,5 @@
 import { MultiPills } from "./ChipRow";
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import {
   api,
   storageGet,
@@ -44,6 +44,23 @@ function loadPrefs(): Prefs {
 
 const COVERED_CATEGORIES = new Set(["breakfast", "dessert", "starter", "side", "vegan", "vegetarian"]);
 
+/** The filters a deal uses. Edits in the open filter panel only take effect once it's closed. */
+interface Filters {
+  cuisines: string[];
+  categories: string[];
+  meals: MealFilter[];
+  dietary: DietId[];
+  goals: GoalId[];
+  onHand: boolean;
+  leniency: number;
+}
+
+/**
+ * replace: a fresh deck (filters changed, a new search). keepTop: keep the card on top and refill the
+ * rest (the AI toggle flipped). append: top up the deck as it runs low.
+ */
+type DealMode = "replace" | "keepTop" | "append";
+
 
 export function Discover(props: {
   config: AppConfigResponse;
@@ -73,7 +90,9 @@ export function Discover(props: {
   const activeGoals = goalsAvailable ? goals : [];
 
   const [cards, setCards] = useState<Card[]>([]);
-  const [loading, setLoading] = useState(false);
+  /** What's loading right now, if anything. */
+  const [busy, setBusy] = useState<DealMode | null>(null);
+  const loading = busy !== null;
   const [note, setNote] = useState<string | undefined>();
   const [exhausted, setExhausted] = useState(false);
   const [error, setError] = useState<string | undefined>();
@@ -88,39 +107,62 @@ export function Discover(props: {
     storageSet("dishdeck.prefs", JSON.stringify({ source, onHand, leniency, dietary }));
   }, [source, onHand, leniency, dietary.join()]);
 
-  const deal = async (append: boolean) => {
+  // The panel edits these (the "draft"); deals use `applied`, which catches up when the panel closes.
+  const draft: Filters = useMemo(
+    () => ({ cuisines, categories, meals, dietary, goals, onHand, leniency }),
+    [cuisines.join(), categories.join(), meals.join(), dietary.join(), goals.join(), onHand, leniency],
+  );
+  const draftKey = JSON.stringify(draft);
+  const [applied, setApplied] = useState<Filters>(draft);
+  const appliedKey = JSON.stringify(applied);
+  const pendingChanges = draftKey !== appliedKey;
+  useEffect(() => {
+    if (!showFilters && pendingChanges) setApplied(draft);
+  }, [showFilters, draftKey]);
+
+  // Read the latest state inside async deals.
+  const cardsRef = useRef(cards);
+  cardsRef.current = cards;
+
+  const deal = async (mode: DealMode) => {
     const id = ++requestId.current;
-    setLoading(true);
+    const f = applied;
+    // keepTop: the top card stays, and the rest (from the old source) go straight away.
+    const keep = mode === "append" ? cardsRef.current : mode === "keepTop" ? cardsRef.current.slice(0, 1) : [];
+    if (mode === "keepTop") setCards(keep);
+    setBusy(mode);
     setError(undefined);
-    if (!append) setExhausted(false);
+    if (mode !== "append") setExhausted(false);
     try {
-      const current = append ? cards : [];
       const res = await api.deck({
         source,
         mood: mood.trim() || undefined,
         ai: props.aiOn,
-        cuisines,
-        categories,
-        meals,
-        dietary,
-        goals: activeGoals,
-        onHand,
-        leniency,
+        cuisines: f.cuisines,
+        categories: f.categories,
+        meals: f.meals,
+        dietary: f.dietary,
+        // Goals stay picked while AI is off; they just can't be checked without it.
+        goals: goalsAvailable ? f.goals : [],
+        onHand: f.onHand,
+        leniency: f.leniency,
         count: 8,
-        exclude: [...seen.current, ...current.map((c) => c.key)],
+        exclude: [...seen.current, ...keep.map((c) => c.key)],
       });
       if (id !== requestId.current) return;
+      // Whatever is in the deck now (cards swiped while this loaded are already gone).
+      const current = mode === "replace" ? [] : cardsRef.current;
       const keys = new Set(current.map((c) => c.key));
-      const fresh = res.cards.filter((c) => !keys.has(c.key));
+      const fresh = res.cards.filter((c) => !keys.has(c.key) && !seen.current.has(c.key));
       setCards([...current, ...fresh]);
       setNote(res.note);
       if (fresh.length === 0) setExhausted(true);
     } catch (e) {
       if (id !== requestId.current) return;
       setError(e instanceof Error ? e.message : "Couldn't load ideas");
-      if (!append) setCards([]);
+      if (mode === "replace") setCards([]);
     } finally {
-      if (id === requestId.current) setLoading(false);
+      if (id === requestId.current) setBusy(null);
     }
   };
 
@@ -129,25 +171,24 @@ export function Discover(props: {
     props.onWide?.(source === "saved");
   }, [source]);
 
-  // First deal, and re-deal when the filters change. "Our recipes" shows the grid instead of a deck.
+  // First deal, and a fresh deck when the applied filters change. "Our recipes" shows the grid instead.
+  // Flipping the AI toggle keeps the current card and refills the rest, but only when it changes where
+  // ideas come from: a typed craving or nutrition goals, or AI cards already in the deck (from the
+  // fallback when TheMealDB had nothing). Plain browsing is TheMealDB either way.
+  const lastDeal = useRef<{ source: Source; aiOn: boolean } | null>(null);
   useEffect(() => {
+    const prev = lastDeal.current;
+    lastDeal.current = { source, aiOn: props.aiOn };
     if (source === "saved") return;
-    deal(false);
-  }, [source, cuisines.join(), categories.join(), meals.join(), dietary.join(), goals.join(), onHand, leniency]);
-
-  // Flipping the AI toggle only changes "New ideas" results for a typed search or nutrition goals.
-  const aiFirstRun = useRef(true);
-  useEffect(() => {
-    if (aiFirstRun.current) {
-      aiFirstRun.current = false;
-      return;
-    }
-    if (source === "new" && (mood.trim() || goals.length)) deal(false);
-  }, [props.aiOn]);
+    const aiFlipped = !!prev && prev.source === source && prev.aiOn !== props.aiOn;
+    if (!aiFlipped) return void deal("replace");
+    const matters = !!mood.trim() || applied.goals.length > 0 || cardsRef.current.some((c) => c.source === "ai");
+    if (matters) deal(cardsRef.current.length > 0 ? "keepTop" : "replace");
+  }, [source, appliedKey, props.aiOn]);
 
   // Keep the deck topped up.
   useEffect(() => {
-    if (source === "new" && cards.length <= 2 && cards.length > 0 && !loading && !exhausted) deal(true);
+    if (source === "new" && cards.length <= 2 && cards.length > 0 && !loading && !exhausted && !error) deal("append");
   }, [cards.length, loading, exhausted]);
 
   const removeCard = (card: Card) => {
@@ -202,12 +243,15 @@ export function Discover(props: {
   const submitMood = (e: Event) => {
     e.preventDefault();
     (document.activeElement as HTMLElement | null)?.blur();
-    deal(false);
+    setShowFilters(false);
+    // Closing the panel with unapplied changes deals on its own (with this search).
+    if (!(showFilters && pendingChanges)) deal("replace");
   };
 
   const filterCount =
     cuisines.length + categories.length + (onHand ? 1 : 0) + meals.length + dietary.length + activeGoals.length;
   const willUseAi = props.aiOn && source === "new" && (mood.trim().length > 0 || activeGoals.length > 0);
+  const loadingText = willUseAi ? "Cooking up AI ideas…" : "Shuffling the deck…";
   // These TheMealDB categories are covered by the Meal and Dietary filters.
   const types = config.categories.filter((c) => !COVERED_CATEGORIES.has(c.toLowerCase()));
 
@@ -285,13 +329,13 @@ export function Discover(props: {
               <div class="filter-label">
                 Nutrition <span class="filter-hint">{goalsAvailable ? "pick any" : "Needs AI ideas"}</span>
               </div>
-              <MultiPills options={config.goals} selected={activeGoals} onChange={setGoals} disabled={!goalsAvailable} />
+              <MultiPills options={config.goals} selected={goals} onChange={setGoals} disabled={!goalsAvailable} />
               {config.cuisines.length > 0 && (
                 <>
                   <div class="filter-label">
                     Cuisine <span class="filter-hint">pick any</span>
                   </div>
-                  <MultiPills options={config.cuisines} selected={cuisines} onChange={setCuisines} />
+                  <MultiPills options={config.cuisines} selected={cuisines} onChange={setCuisines} limit={15} />
                 </>
               )}
               {types.length > 0 && (
@@ -299,33 +343,55 @@ export function Discover(props: {
                   <div class="filter-label">
                     Type <span class="filter-hint">pick any</span>
                   </div>
-                  <MultiPills options={types} selected={categories} onChange={setCategories} />
+                  <MultiPills options={types} selected={categories} onChange={setCategories} limit={15} />
                 </>
               )}
+              <button type="button" class="btn primary wide filters-done" onClick={() => setShowFilters(false)}>
+                {pendingChanges ? "Apply filters" : "Done"}
+              </button>
             </div>
           )}
 
-          {note && !error && <p class="note">{note}</p>}
+          {busy === "keepTop" ? (
+            <p class="note loading-note" role="status">
+              <span class="spinner small" /> {willUseAi ? "Switching to AI ideas…" : "Switching to TheMealDB ideas…"}
+            </p>
+          ) : (
+            note && !error && busy !== "replace" && <p class="note">{note}</p>
+          )}
           {error && (
             <div class="empty">
               <p>{error}</p>
-              <button class="btn" onClick={() => deal(false)}>Try again</button>
+              <button class="btn" onClick={() => deal("replace")}>Try again</button>
             </div>
           )}
 
-          {!error && cards.length > 0 && <Deck cards={cards} saved={false} onDecide={decide} onOpen={setDetailCard} />}
+          {!error && cards.length > 0 && (
+            // A fresh deck is on its way: dim the old one so it's clear it's about to change.
+            <div class={`deck-holder ${busy === "replace" ? "refreshing" : ""}`} aria-busy={busy === "replace"}>
+              <Deck cards={cards} saved={false} onDecide={decide} onOpen={setDetailCard} />
+              {busy === "replace" && (
+                <div class="deck-loading">
+                  <div class="deck-loading-pill">
+                    <div class="spinner" />
+                    <span>{loadingText}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           {!error && cards.length === 0 && (
             <div class="empty">
               {loading ? (
                 <>
                   <div class="spinner" />
-                  <p>{willUseAi ? "Cooking up ideas…" : "Shuffling the deck…"}</p>
+                  <p>{loadingText}</p>
                 </>
               ) : (
                 <>
                   <p>{exhausted ? "That's every idea for these filters." : "No cards yet."}</p>
-                  <button class="btn" onClick={() => deal(false)}>
+                  <button class="btn" onClick={() => deal("replace")}>
                     <IconRefresh size={18} /> Deal again
                   </button>
                 </>

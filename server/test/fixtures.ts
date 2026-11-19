@@ -51,5 +51,7 @@ export function mealieRecipe(partial: Partial<MealieRecipe> & { name: string; in
     recipeInstructions: [{ text: "Cook it." }],
     image: partial.image ?? null,
     description: partial.description ?? "",
+    ...(partial.dateAdded !== undefined ? { dateAdded: partial.dateAdded } : {}),
+    ...(partial.createdAt !== undefined ? { createdAt: partial.createdAt } : {}),
   };
 }

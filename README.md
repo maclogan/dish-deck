@@ -11,11 +11,12 @@ Dish Deck is a small, mobile-first web app you install on your phone (it's a PWA
 
 - **Swipe deck**
   - Drag a card **top-right** to save it to Mealie, **bottom-right** to save it *and* put it on a day's lunch or dinner, **left** to skip. Tap a card for ingredients and steps.
-  - **New ideas** come from [TheMealDB](https://www.themealdb.com) (free), or from Claude when you type a craving and add an API key.
+  - **New ideas** come from [TheMealDB](https://www.themealdb.com) (free). With an API key and the **AI** switch on, Claude handles typed cravings and nutrition goals, and fills the deck whenever TheMealDB has nothing new for your filters. Flipping the switch keeps your filters and the card you're looking at.
+  - Tap a card and drag its sheet down (or tap the backdrop) to close it.
   - **Our recipes** is your recipe book: every saved Mealie recipe in one grid of cards (see below).
 - **"What sounds good?"**: type a mood ("cozy soup", "something with salmon") or pick a cuisine or dish type.
-- **Recipe book**: "Our recipes" shows every saved Mealie recipe at once as a grid of cards. Search by name or ingredient, filter by meal, dietary needs, nutrition, category/tag or "have everything on hand", and sort by name, newest, quickest, rating or fewest missing ingredients. Tap a card to see it or add it to this week.
-- **Filters** (pick as many as you like; within a filter, picks mean "any of these", e.g. lunch or dinner): meal (breakfast, lunch, dinner, dessert, snack), dietary restrictions and allergies (vegetarian, vegan, pescatarian, gluten-, dairy-, egg-, nut-, shellfish- and soy-free) and nutrition goals (low calorie, low carb, keto, high protein, high fiber, low fat). Dietary filters are the exception: a card must meet all of them, and they check every card's ingredients, whatever the source. Nutrition goals use AI estimates for new ideas (TheMealDB has no nutrition data) and Mealie's nutrition fields or tags for saved recipes.
+- **Recipe book**: "Our recipes" shows every saved Mealie recipe at once as a grid of cards. Search by name or ingredient, filter by meal, dietary needs, nutrition, category/tag or "have everything on hand", and sort by name, newest or oldest saved, quickest, rating or fewest missing ingredients. Tap a card to see it or add it to this week.
+- **Filters** (pick as many as you like; within a filter, picks mean "any of these", e.g. lunch or dinner): meal (breakfast, lunch, dinner, dessert, snack), dietary restrictions and allergies (vegetarian, vegan, pescatarian, gluten-, dairy-, egg-, nut-, shellfish- and soy-free) and nutrition goals (low calorie, low carb, keto, high protein, high fiber, low fat). Dietary filters are the exception: a card must meet all of them, and they check every card's ingredients, whatever the source. Nutrition goals use AI estimates for new ideas (TheMealDB has no nutrition data) and Mealie's nutrition fields or tags for saved recipes. On *New ideas*, filter changes apply when you close the filter panel (or tap **Apply filters**). Long lists like cuisine show the most common options first, with **+N more** for the rest.
 - **Use what's on hand**: only show dishes you can mostly make with the foods marked *on hand* in Mealie, allowing up to *N* missing ingredients. For saved recipes it uses Mealie's own recipe finder.
 - **Randomize this week**: fills open lunch and dinner slots for the next 7 days from your saved recipes, then lets you reroll any slot before saving. It's rules-based, so it's free and predictable:
   - dinners that make leftovers become the next day's lunch
@@ -202,6 +203,8 @@ Dish Deck reads what's already in Mealie, so a little tidying there pays off:
 npm install
 npm run dev:mock          # fake Mealie + TheMealDB on :9100 (no real data touched)
 npm run dev:server:mock   # API server on :8080 using dev/mock.env
+# To try AI mode offline, the mock also fakes Claude:
+# ANTHROPIC_API_KEY=dev ANTHROPIC_BASE_URL=http://localhost:9100 npm run dev:server:mock
 npm run dev:web           # UI with hot reload on http://localhost:5173
 npm test                  # unit + integration tests
 npm run typecheck
