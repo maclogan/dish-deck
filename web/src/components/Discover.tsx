@@ -171,15 +171,19 @@ export function Discover(props: {
     props.onWide?.(source === "saved");
   }, [source]);
 
-  // First deal; a fresh deck when the applied filters change; and when the AI toggle flips, keep the
-  // current card and refill the rest from the other source. "Our recipes" shows the grid instead.
+  // First deal, and a fresh deck when the applied filters change. "Our recipes" shows the grid instead.
+  // Flipping the AI toggle keeps the current card and refills the rest, but only when it changes where
+  // ideas come from: a typed craving or nutrition goals, or AI cards already in the deck (from the
+  // fallback when TheMealDB had nothing). Plain browsing is TheMealDB either way.
   const lastDeal = useRef<{ source: Source; aiOn: boolean } | null>(null);
   useEffect(() => {
     const prev = lastDeal.current;
     lastDeal.current = { source, aiOn: props.aiOn };
     if (source === "saved") return;
     const aiFlipped = !!prev && prev.source === source && prev.aiOn !== props.aiOn;
-    deal(aiFlipped && cardsRef.current.length > 0 ? "keepTop" : "replace");
+    if (!aiFlipped) return void deal("replace");
+    const matters = !!mood.trim() || applied.goals.length > 0 || cardsRef.current.some((c) => c.source === "ai");
+    if (matters) deal(cardsRef.current.length > 0 ? "keepTop" : "replace");
   }, [source, appliedKey, props.aiOn]);
 
   // Keep the deck topped up.
@@ -246,7 +250,7 @@ export function Discover(props: {
 
   const filterCount =
     cuisines.length + categories.length + (onHand ? 1 : 0) + meals.length + dietary.length + activeGoals.length;
-  const willUseAi = props.aiOn && source === "new";
+  const willUseAi = props.aiOn && source === "new" && (mood.trim().length > 0 || activeGoals.length > 0);
   const loadingText = willUseAi ? "Cooking up AI ideas…" : "Shuffling the deck…";
   // These TheMealDB categories are covered by the Meal and Dietary filters.
   const types = config.categories.filter((c) => !COVERED_CATEGORIES.has(c.toLowerCase()));

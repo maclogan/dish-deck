@@ -11,7 +11,7 @@ Dish Deck is a small, mobile-first web app you install on your phone (it's a PWA
 
 - **Swipe deck**
   - Drag a card **top-right** to save it to Mealie, **bottom-right** to save it *and* put it on a day's lunch or dinner, **left** to skip. Tap a card for ingredients and steps.
-  - **New ideas** come from [TheMealDB](https://www.themealdb.com) (free), or from Claude when you add an API key and the **AI** switch in the header is on. Flipping the switch keeps your filters and the card you're looking at; the cards after it come from the other source.
+  - **New ideas** come from [TheMealDB](https://www.themealdb.com) (free). With an API key and the **AI** switch on, Claude handles typed cravings and nutrition goals, and fills the deck whenever TheMealDB has nothing new for your filters. Flipping the switch keeps your filters and the card you're looking at.
   - Tap a card and drag its sheet down (or tap the backdrop) to close it.
   - **Our recipes** is your recipe book: every saved Mealie recipe in one grid of cards (see below).
 - **"What sounds good?"**: type a mood ("cozy soup", "something with salmon") or pick a cuisine or dish type.

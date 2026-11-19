@@ -157,26 +157,59 @@ describe("deck", () => {
     expect(warnings[0]).toMatch(/529 overloaded/);
   });
 
-  it("uses AI for every new-ideas deal while AI is on, even without a search", async () => {
-    const m = fakeMealie();
-    const asked: { mood?: string; avoid: string[] }[] = [];
-    const ai = {
-      generate: async (req: { mood?: string; avoid: string[] }) => {
-        asked.push(req);
-        return [{ key: "ai:miso-glazed-cod", source: "ai", title: "Miso Glazed Cod", tags: [], ingredients: ["2 cod fillets"], instructions: ["Bake."], suits: ["dinner"] }];
-      },
-    } as unknown as AiRecipes;
-    const service = new Service({ config, mealie: new MealieClient(config.mealieUrl, config.mealieToken, m.fetchImpl), mealdb: fakeMealDb(), ai });
-    const on = await service.deck({ source: "new", onHand: false, leniency: 2, count: 4, exclude: ["ai:sesame-noodles", "mealdb:1"] });
-    expect(on.cards.map((c) => c.source)).toEqual(["ai"]);
-    expect(asked[0]!.mood).toBeUndefined();
-    // AI ideas already dealt are named first so Claude doesn't repeat them; saved recipes follow.
-    expect(asked[0]!.avoid[0]).toBe("sesame noodles");
-    expect(asked[0]!.avoid).toContain("Beef Tacos");
+  describe("AI ideas", () => {
+    const fakeAi = () => {
+      const asked: { mood?: string; avoid: string[] }[] = [];
+      const ai = {
+        generate: async (req: { mood?: string; avoid: string[] }) => {
+          asked.push(req);
+          return [{ key: "ai:miso-glazed-cod", source: "ai", title: "Miso Glazed Cod", tags: [], ingredients: ["2 cod fillets"], instructions: ["Bake."], suits: ["dinner"] }];
+        },
+      } as unknown as AiRecipes;
+      return { ai, asked };
+    };
+    const withAi = (ai: AiRecipes, mealdb = fakeMealDb()) => {
+      const m = fakeMealie();
+      return new Service({ config, mealie: new MealieClient(config.mealieUrl, config.mealieToken, m.fetchImpl), mealdb, ai });
+    };
 
-    const off = await service.deck({ source: "new", ai: false, onHand: false, leniency: 2, count: 4, exclude: [], mood: "teriyaki" });
-    expect(off.cards.map((c) => c.source)).toEqual(["mealdb"]);
-    expect(asked).toHaveLength(1);
+    it("browses TheMealDB without a search, even with AI on", async () => {
+      const { ai, asked } = fakeAi();
+      const res = await withAi(ai).deck({ source: "new", onHand: false, leniency: 2, count: 4, exclude: [] });
+      expect(res.cards.map((c) => c.source)).toEqual(["mealdb"]);
+      expect(asked).toHaveLength(0);
+    });
+
+    it("uses AI for a typed craving, without repeating ideas already dealt", async () => {
+      const { ai, asked } = fakeAi();
+      const res = await withAi(ai).deck({ source: "new", mood: "flaky fish", onHand: false, leniency: 2, count: 4, exclude: ["ai:sesame-noodles", "mealdb:1"] });
+      expect(res.cards.map((c) => c.source)).toEqual(["ai"]);
+      expect(asked[0]!.avoid[0]).toBe("sesame noodles");
+      expect(asked[0]!.avoid).toContain("Beef Tacos");
+    });
+
+    it("fills the deck with AI when TheMealDB has nothing new", async () => {
+      const { ai, asked } = fakeAi();
+      // The fake TheMealDB only knows one dish; once it's been dealt there's nothing left.
+      const res = await withAi(ai).deck({ source: "new", onHand: false, leniency: 2, count: 4, exclude: ["mealdb:52772"] });
+      expect(res.cards.map((c) => c.title)).toEqual(["Miso Glazed Cod"]);
+      expect(res.note).toMatch(/TheMealDB had nothing new for this, so here are AI ideas/);
+      expect(asked[0]!.mood).toBeUndefined();
+    });
+
+    it("fills the deck with AI when TheMealDB is down", async () => {
+      const { ai } = fakeAi();
+      const down = { candidates: async () => { throw new Error("fetch failed"); } } as unknown as MealDb;
+      const res = await withAi(ai, down).deck({ source: "new", onHand: false, leniency: 2, count: 4, exclude: [] });
+      expect(res.cards.map((c) => c.source)).toEqual(["ai"]);
+    });
+
+    it("leaves the deck empty when TheMealDB has nothing and AI is off", async () => {
+      const { ai, asked } = fakeAi();
+      const res = await withAi(ai).deck({ source: "new", ai: false, onHand: false, leniency: 2, count: 4, exclude: ["mealdb:52772"] });
+      expect(res.cards).toEqual([]);
+      expect(asked).toHaveLength(0);
+    });
   });
 
   it("takes several cuisines as any of them", async () => {
