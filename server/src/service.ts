@@ -27,7 +27,10 @@ import {
   styleLabel,
 } from "./filters.js";
 import { classifyRecipe, planWeek, slotKey, type ExistingSlot } from "./planner.js";
-import type { AiCard, AiRecipes } from "./sources/ai.js";
+import { nextRegions, type AiCard, type AiRecipes, type DishIdea } from "./sources/ai.js";
+import { sitesFor } from "./sources/sites.js";
+import { webRecipeToCard, type RecipeSites, type WebRecipe } from "./sources/webrecipes.js";
+import type { Store } from "./store.js";
 import { mealDbToCard, type MealDb } from "./sources/mealdb.js";
 import type {
   ApplyRequest,
@@ -41,11 +44,12 @@ import type {
   MealType,
   Nutrition,
   PlanDay,
+  HistoryRequest,
   SaveRequest,
   SaveResponse,
   WeekResponse,
 } from "./types.js";
-import { addDays, mapLimit, normalize, parseMinutes, planDates, toIsoDuration } from "./util.js";
+import { addDays, mapLimit, normalize, parseMinutes, planDates, shuffle, slugify, toIsoDuration } from "./util.js";
 import type { PhotoFinder, PhotoQuery } from "./sources/photos.js";
 
 export interface Deps {
@@ -55,6 +59,11 @@ export interface Deps {
   ai?: AiRecipes;
   /** Finds photos for AI ideas and for Mealie recipes that have none. */
   photos?: PhotoFinder;
+  /** Persistent cache and household history. */
+  store?: Store;
+  /** Real recipes from trusted sites, and the sites per cuisine. */
+  sites?: RecipeSites;
+  siteMap?: Record<string, string[]>;
   now?: () => Date;
   /** Reports recoverable problems (e.g. an AI failure we fell back from). */
   warn?: (message: string) => void;
@@ -252,8 +261,160 @@ export class Service {
     };
   }
 
+  /** Web recipe cards with a photo (their own, or a looked-up one); cards with neither are dropped. */
+  private async pictured(cards: Card[]): Promise<Card[]> {
+    const done = await mapLimit(cards, 4, async (c) => {
+      if (c.image) return c;
+      const found = await this.foundPhoto({ title: c.title });
+      return found.image ? { ...c, ...found } : undefined;
+    });
+    return done.filter((c): c is Card => !!c);
+  }
+
+  /** Cache key for a dish-name list: everything that changes which dishes Claude would suggest. */
+  private poolKey(req: DeckQuery): string {
+    const sorted = (xs: string[] | undefined) => [...(xs ?? [])].map((x) => x.toLowerCase()).sort();
+    return JSON.stringify({
+      c: sorted(req.cuisines),
+      t: sorted(req.categories),
+      m: sorted(req.meals),
+      d: sorted(req.dietary),
+      s: req.style ?? "home",
+      q: normalize(req.mood ?? ""),
+    });
+  }
+
+  /**
+   * Dishes Claude suggested for these filters, saved and dealt from over many decks. Claude is asked
+   * again (for a fresh pair of regions) only when fewer than `need` dishes are left unused.
+   */
+  private async dishPool(req: DeckQuery, unused: (d: DishIdea) => boolean, need: number, book: MealieRecipeSummary[]): Promise<DishIdea[]> {
+    const store = this.deps.store;
+    const key = this.poolKey(req);
+    const pool = store?.getPool<{ dishes: DishIdea[]; regions: string[]; dryUntil?: number }>(key, 180 * 86400_000) ?? {
+      dishes: [],
+      regions: [],
+    };
+    if (pool.dishes.filter(unused).length >= need || pool.dishes.length >= 200) return pool.dishes;
+    // Claude recently had nothing new to add for these filters: don't pay to ask again for a while.
+    if (pool.dryUntil && Date.now() < pool.dryUntil && pool.dishes.length) return pool.dishes;
+    const regions = (req.style ?? "home") === "takeout" ? [] : nextRegions(req.cuisines, pool.regions);
+    const more = await this.deps.ai!.dishNames({
+      mood: req.mood?.trim() || undefined,
+      cuisines: req.cuisines,
+      categories: req.categories,
+      dietary: req.dietary,
+      meals: req.meals,
+      style: req.style,
+      regions,
+      count: 25,
+      leniency: req.leniency,
+      avoid: [...pool.dishes.map((d) => d.name), ...book.map((r) => r.name)],
+      bookSample: book.map((r) => r.name),
+    });
+    const known = new Set(pool.dishes.map((d) => normalize(d.name)));
+    const added = more.filter((d) => !known.has(normalize(d.name)));
+    const next = {
+      dishes: [...pool.dishes, ...added],
+      regions: [...pool.regions, ...regions],
+      dryUntil: added.length < 3 ? Date.now() + 7 * 86400_000 : undefined,
+    };
+    store?.putPool(key, next);
+    return next.dishes;
+  }
+
+  /**
+   * Real recipes for Claude's dish names: each name is matched to a page on the cuisine's trusted
+   * sites (cached), and the recipe is read from that page (cached). Dishes with no page get an
+   * AI-written recipe (labelled as such) — this path only runs with AI on.
+   */
+  private async realRecipes(
+    req: DeckQuery,
+    ctx: { seen: Set<string>; book: MealieRecipeSummary[]; bookNames: Set<string> },
+  ): Promise<{ cards: Card[] }> {
+    const sites = this.deps.sites!;
+    const store = this.deps.store;
+    const siteMap = this.deps.siteMap ?? {};
+    const cuisineSites = sitesFor(siteMap, req.cuisines);
+    // A typed search also looks through the general sites.
+    const domains = req.mood?.trim() && req.cuisines.length ? [...new Set([...cuisineSites, ...sitesFor(siteMap, [])])] : cuisineSites;
+    const matchKey = (d: DishIdea) => `${normalize(d.name)}|${domains.join(",")}`;
+    const used = (d: DishIdea) => {
+      if (ctx.bookNames.has(normalize(d.name)) || ctx.seen.has(`ai:${slugify(d.name)}`)) return true;
+      const url = store?.getMatch(matchKey(d), 90 * 86400_000, 30 * 86400_000);
+      return !!url && ctx.seen.has(`web:${url}`);
+    };
+    const want = req.count;
+    // Ask Claude for more names only when the saved list can't fill this deck.
+    const dishes = await this.dishPool(req, (d) => !used(d), want, ctx.book);
+    const candidates = shuffle(dishes.filter((d) => !used(d))).slice(0, want * 3);
+
+    const found: Card[] = [];
+    const missing: DishIdea[] = [];
+    // Two dish names can land on the same page ("Red-braised pork" and "Hong shao rou").
+    const taken = new Set<string>();
+    for (let i = 0; i < candidates.length && found.length < want; i += 4) {
+      const batch = await mapLimit(candidates.slice(i, i + 4), 4, async (d) => {
+        const key = matchKey(d);
+        const cached = store?.getMatch(key, 90 * 86400_000, 30 * 86400_000);
+        let recipe: WebRecipe | null | undefined;
+        if (typeof cached === "string") recipe = await sites.read(cached);
+        else if (cached === undefined) {
+          recipe = (await sites.find(d.aliases, domains)) ?? null;
+          store?.putMatch(key, recipe?.url ?? null);
+        }
+        return { d, recipe: recipe ?? undefined };
+      });
+      for (const { d, recipe } of batch) {
+        if (!recipe) {
+          missing.push(d);
+          continue;
+        }
+        let card = webRecipeToCard(recipe, {
+          region: d.region,
+          nativeName: d.nativeName,
+          cuisine: req.cuisines.length === 1 ? req.cuisines[0] : (d.cuisine ?? recipe.cuisine),
+          suits: d.suits.length ? d.suits : undefined,
+        });
+        if (ctx.seen.has(card.key) || taken.has(card.key) || ctx.bookNames.has(normalize(card.title))) continue;
+        if (!fitsDiet(card.ingredients, req.dietary ?? []) || !fitsMeal(card, req.meals)) continue;
+        if (!card.image) {
+          const photo = await this.foundPhoto({ title: card.title, wikipediaTitle: d.wikipediaTitle });
+          if (!photo.image) continue;
+          card = { ...card, ...photo };
+        }
+        taken.add(card.key);
+        found.push(card);
+      }
+    }
+
+    // No page for some dishes: have Claude write those, clearly marked as AI recipes.
+    if (found.length < want && missing.length && this.deps.ai) {
+      const only = missing.slice(0, want - found.length);
+      try {
+        const written = await this.deps.ai.generate({
+          only,
+          cuisines: req.cuisines,
+          dietary: req.dietary,
+          meals: req.meals,
+          style: req.style,
+          count: only.length,
+          leniency: req.leniency,
+          avoid: [],
+          bookSample: [],
+        });
+        const ok = written.filter((c) => fitsDiet(c.ingredients, req.dietary ?? []) && !ctx.seen.has(c.key));
+        found.push(...(await this.withPhotos(ok)));
+      } catch (err) {
+        this.deps.warn?.(`AI recipes for unmatched dishes failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    return { cards: found };
+  }
+
   private async newDeck(req: DeckQuery): Promise<DeckResponse> {
-    const seen = new Set(req.exclude);
+    // This session's cards plus everything the household skipped or saved before (on any device).
+    const seen = new Set([...req.exclude, ...(this.deps.store?.excludedKeys() ?? [])]);
     const book = await this.recipeSummaries().catch(() => [] as MealieRecipeSummary[]);
     const bookNames = new Set(book.map((r) => normalize(r.name)));
     const onHand = req.onHand ? await this.onHandFoods() : undefined;
@@ -316,11 +477,41 @@ export class Service {
     const aiNote = () =>
       (mood ? `AI ideas for "${mood}"` : "AI ideas") + (req.cuisines.length ? ` · ${req.cuisines.join(" or ")}` : "") + style + filterSuffix(req);
 
+    // Real recipes from trusted sites: Claude only names the dishes (cached), the recipes come from the
+    // sites. Nutrition goals still need AI-written recipes, since sites rarely list nutrition.
+    if (aiFirst && !goals.length && this.deps.sites) {
+      const real = await this.realRecipes(req, { seen, book, bookNames }).catch((err) => {
+        this.deps.warn?.(`Real recipe lookup failed: ${err instanceof Error ? err.message : String(err)}`);
+        return undefined;
+      });
+      if (real?.cards.length) {
+        const done = finish(real.cards);
+        if (done.cards.length) {
+          const where = req.cuisines.length ? ` · ${req.cuisines.join(" or ")}` : mood ? ` for "${mood}"` : "";
+          const written = done.cards.slice(0, req.count).filter((c) => c.source === "ai").length;
+          const note = `Recipes from trusted sites${where}${style}${filterSuffix(req)}${written ? ` (${written} written by AI)` : ""}`;
+          return { cards: done.cards.slice(0, req.count), note: note + done.suffix };
+        }
+      }
+    }
+
     if (aiFirst) {
       const ai = await aiIdeas();
       if (ai) {
         const done = finish(ai);
         if (done.cards.length) return { cards: done.cards.slice(0, req.count), note: aiNote() + done.suffix };
+      }
+    }
+
+    // A cuisine without AI: browse the cuisine's trusted sites directly (free), before TheMealDB.
+    if (!aiFirst && req.cuisines.length && !mood && this.deps.sites && this.deps.siteMap) {
+      const domains = sitesFor(this.deps.siteMap, req.cuisines);
+      const found = await this.deps.sites.random(domains, req.count * 2, seen).catch(() => [] as WebRecipe[]);
+      const cards = (await this.pictured(found.map((r) => webRecipeToCard(r, { cuisine: req.cuisines.length === 1 ? req.cuisines[0] : undefined }))))
+        .filter((c) => fitsDiet(c.ingredients, dietary) && fitsMeal(c, req.meals));
+      const done = finish(cards);
+      if (done.cards.length) {
+        return { cards: done.cards.slice(0, req.count), note: `Recipes from trusted sites · ${req.cuisines.join(" or ")}${filterSuffix({ ...req, goals: [] })}${done.suffix}` };
       }
     }
 
@@ -382,13 +573,22 @@ export class Service {
       alreadyInBook = true;
     } else {
       const book = await this.recipeSummaries(true);
-      const existing = book.find((r) => normalize(r.name) === normalize(card.title));
+      const existing = book.find(
+        (r) => normalize(r.name) === normalize(card.title) || (!!card.sourceUrl && r.orgURL === card.sourceUrl),
+      );
       if (existing) {
         recipeId = existing.id;
         slug = existing.slug;
         alreadyInBook = true;
       } else {
-        slug = await this.mealie.createFromSchemaJson(JSON.stringify(toSchemaOrg(card)), card.sourceUrl);
+        // Our own copy of the recipe (with the original page as its source link), so categories, tags and
+        // the native name come along. For a web recipe, Mealie's own importer is the backup.
+        try {
+          slug = await this.mealie.createFromSchemaJson(JSON.stringify(toSchemaOrg(card)), card.sourceUrl);
+        } catch (err) {
+          if (card.source !== "web" || !card.sourceUrl) throw err;
+          slug = await this.mealie.createFromUrl(card.sourceUrl);
+        }
         const created = await this.mealie.getRecipe(slug);
         recipeId = created.id;
         if (card.image && !created.image) {
@@ -404,7 +604,14 @@ export class Service {
       planned = req.plan;
     }
 
+    this.deps.store?.record(card.key, req.target, card.title);
     return { slug, recipeUrl: await this.recipeLink(slug), planned, alreadyInBook };
+  }
+
+  /** Remember a skipped card for the whole household, so it isn't dealt again on any device. */
+  history(req: HistoryRequest) {
+    this.deps.store?.record(req.key, req.action, req.title);
+    return { ok: true };
   }
 
   // ------------------------------------------------------------------ week planning

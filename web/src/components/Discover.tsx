@@ -211,7 +211,11 @@ export function Discover(props: {
   const decide = async (card: Card, action: Action) => {
     setDetailCard(null);
     removeCard(card);
-    if (action === "skip") return;
+    if (action === "skip") {
+      // Remembered for the whole household, so it won't come back on any device.
+      api.history({ key: card.key, action: "skip", title: card.title }).catch(() => undefined);
+      return;
+    }
     if (action === "plan") {
       setPlanCard(card);
       return;
@@ -260,7 +264,7 @@ export function Discover(props: {
     cuisines.length + categories.length + (onHand ? 1 : 0) + meals.length + dietary.length + activeGoals.length +
     (props.aiOn && style !== "home" ? 1 : 0);
   const willUseAi = props.aiOn && source === "new" && (mood.trim().length > 0 || activeGoals.length > 0 || applied.cuisines.length > 0);
-  const loadingText = willUseAi ? "Cooking up AI ideas…" : "Shuffling the deck…";
+  const loadingText = willUseAi ? "Finding recipes…" : "Shuffling the deck…";
   // These TheMealDB categories are covered by the Meal and Dietary filters.
   const types = config.categories.filter((c) => !COVERED_CATEGORIES.has(c.toLowerCase()));
 

@@ -1,0 +1,82 @@
+# Optional: SearXNG (https://docs.searxng.org), a free self-hosted search engine. Dish Deck uses it only
+# for dishes its trusted recipe sites' indexes don't have. No API keys, no per-search cost.
+#
+#   kubectl -n dish-deck create secret generic searxng --from-literal=secret=$(openssl rand -hex 32)
+#   kubectl apply -f deploy/searxng.yaml
+#
+# Then add to .env (and update the dish-deck-env secret, see deploy/kubernetes.yaml):
+#   SEARXNG_URL=http://searxng:8080
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: searxng-settings
+  namespace: dish-deck
+data:
+  settings.yml: |
+    use_default_settings: true
+    server:
+      secret_key: "change-me"   # replaced by SEARXNG_SECRET
+      limiter: false
+      image_proxy: false
+    search:
+      safe_search: 0
+      formats:
+        - html
+        - json
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: searxng
+  namespace: dish-deck
+  labels:
+    app: searxng
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: searxng
+  template:
+    metadata:
+      labels:
+        app: searxng
+    spec:
+      containers:
+        - name: searxng
+          image: docker.io/searxng/searxng:latest
+          env:
+            - name: SEARXNG_SECRET
+              valueFrom:
+                secretKeyRef: { name: searxng, key: secret }
+          ports:
+            - name: http
+              containerPort: 8080
+          volumeMounts:
+            - name: settings
+              mountPath: /etc/searxng/settings.yml
+              subPath: settings.yml
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 25m, memory: 128Mi }
+            limits: { memory: 512Mi }
+      volumes:
+        - name: settings
+          configMap:
+            name: searxng-settings
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: searxng
+  namespace: dish-deck
+spec:
+  selector:
+    app: searxng
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

@@ -17,3 +17,6 @@ server/dist/
 
 # Fake values for local development only
 !dev/mock.env
+
+# Local cache and history (DATA_DIR)
+data/

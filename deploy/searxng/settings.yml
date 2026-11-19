@@ -1,0 +1,13 @@
+# Minimal SearXNG settings for Dish Deck's search fallback (everything else uses SearXNG's defaults).
+# The JSON format is what Dish Deck reads; the limiter is off because only Dish Deck talks to it.
+use_default_settings: true
+server:
+  # Overridden by the SEARXNG_SECRET environment variable.
+  secret_key: "change-me"
+  limiter: false
+  image_proxy: false
+search:
+  safe_search: 0
+  formats:
+    - html
+    - json

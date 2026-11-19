@@ -1,6 +1,7 @@
 // Shared types used by the server and (type-only) by the web app.
 
-export type CardSource = "mealdb" | "ai" | "mealie";
+/** mealdb: TheMealDB. web: a real recipe read from a trusted site. ai: written by Claude. mealie: saved. */
+export type CardSource = "mealdb" | "web" | "ai" | "mealie";
 export type MealType = "lunch" | "dinner";
 
 /** Dietary restrictions and allergies, enforced by checking ingredients. */
@@ -58,6 +59,8 @@ export interface Card {
   ingredients: string[];
   instructions: string[];
   sourceUrl?: string;
+  /** Site the recipe comes from, e.g. "The Woks of Life" (web recipes). */
+  site?: string;
   /** Per-serving nutrition, when known. AI values are estimates. */
   nutrition?: Nutrition;
   /** Which meals this suits, when known. */
@@ -116,6 +119,12 @@ export interface DeckResponse {
   cards: Card[];
   /** Short note about how the cards were produced, e.g. "AI ideas for 'cozy soup'". */
   note?: string;
+}
+
+export interface HistoryRequest {
+  key: string;
+  action: "skip";
+  title?: string;
 }
 
 export interface SaveRequest {

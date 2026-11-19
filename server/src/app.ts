@@ -13,6 +13,10 @@ import { Service, imageSig } from "./service.js";
 import { AiRecipes } from "./sources/ai.js";
 import { MealDb } from "./sources/mealdb.js";
 import { PhotoFinder } from "./sources/photos.js";
+import { SearxngSearch } from "./sources/searxng.js";
+import { allSites, siteList } from "./sources/sites.js";
+import { RecipeSites, fromMealieScrape } from "./sources/webrecipes.js";
+import { Store } from "./store.js";
 import type { AppConfigResponse } from "./types.js";
 
 const mealType = z.enum(["lunch", "dinner"]);
@@ -20,7 +24,8 @@ const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
 const cardSchema = z.object({
   key: z.string(),
-  source: z.enum(["mealdb", "ai", "mealie"]),
+  source: z.enum(["mealdb", "web", "ai", "mealie"]),
+  site: z.string().max(100).optional(),
   title: z.string().min(1).max(200),
   description: z.string().max(2000).optional(),
   image: z.string().max(2000).optional(),
@@ -66,6 +71,12 @@ const deckSchema = z.object({
   leniency: z.number().int().min(0).max(10).default(2),
   count: z.number().int().min(1).max(12).default(8),
   exclude: z.array(z.string()).max(500).default([]),
+});
+
+const historySchema = z.object({
+  key: z.string().min(1).max(2100),
+  action: z.literal("skip"),
+  title: z.string().max(200).optional(),
 });
 
 const saveSchema = z.object({
@@ -124,15 +135,42 @@ export function rankCuisines(list: string[]): string[] {
   return [...list].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
 }
 
-export function buildApp(config: Config, overrides: Partial<{ service: Service; mealie: MealieClient }> = {}): FastifyInstance {
+export function buildApp(config: Config, overrides: Partial<{ service: Service; mealie: MealieClient; store: Store }> = {}): FastifyInstance {
   const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? "info" } });
   const mealie = overrides.mealie ?? new MealieClient(config.mealieUrl, config.mealieToken);
   const mealdb = new MealDb(config.mealdbKey, fetch, config.mealdbBaseUrl);
   const ai = config.anthropicApiKey
     ? new AiRecipes(config.anthropicApiKey, config.anthropicModel, config.householdContext)
     : undefined;
-  const photos = new PhotoFinder({ wikipediaApi: config.wikipediaApiUrl, pexelsKey: config.pexelsApiKey, warn: (m) => app.log.warn(m) });
-  const service = overrides.service ?? new Service({ config, mealie, mealdb, ai, photos, warn: (m) => app.log.warn(m) });
+  const warn = (m: string) => app.log.warn(m);
+  const store = overrides.store ?? Store.open(config.dataDir, warn);
+  const photos = new PhotoFinder({ wikipediaApi: config.wikipediaApiUrl, pexelsKey: config.pexelsApiKey, warn, store });
+  const siteMap = siteList(config.recipeSites);
+  // Development only: send requests for the trusted sites to the mock server (see dev/mock-server.ts).
+  const devProxy = process.env.DEV_SITE_PROXY?.replace(/\/+$/, "");
+  const siteDomains = new Set(allSites(siteMap));
+  const siteFetch: typeof fetch | undefined = devProxy
+    ? (input, init) => {
+        const u = new URL(String(input));
+        const host = u.hostname.replace(/^www\./, "");
+        return fetch(siteDomains.has(host) ? `${devProxy}/site/${host}${u.pathname}${u.search}` : input, init);
+      }
+    : undefined;
+  const sites = new RecipeSites({
+    store,
+    warn,
+    fetch: siteFetch,
+    scrape: async (url) => fromMealieScrape(await mealie.testScrape(url), url),
+    search: config.searxngUrl ? new SearxngSearch(config.searxngUrl) : undefined,
+  });
+  const service = overrides.service ?? new Service({ config, mealie, mealdb, ai, photos, store, sites, siteMap, warn });
+
+  // Index the trusted sites in the background (each refreshes weekly), so the first deal is quick.
+  if (!overrides.service && !overrides.store) {
+    const warm = () => void sites.ensureIndexed(allSites(siteMap)).catch(() => undefined);
+    setTimeout(warm, 5_000).unref();
+    setInterval(warm, 12 * 3600_000).unref();
+  }
 
   // Optional shared passcode for the API (in addition to Cloudflare Access).
   app.addHook("onRequest", async (req, reply) => {
@@ -186,6 +224,7 @@ export function buildApp(config: Config, overrides: Partial<{ service: Service; 
 
   app.post("/api/deck", async (req) => service.deck(deckSchema.parse(req.body)));
   app.post("/api/save", async (req) => service.save(saveSchema.parse(req.body)));
+  app.post("/api/history", async (req) => service.history(historySchema.parse(req.body)));
   app.get("/api/recipes", async () => service.book());
   app.get("/api/week", async () => service.week());
   app.post("/api/plan/generate", async (req) => service.generate(generateSchema.parse(req.body ?? {})));

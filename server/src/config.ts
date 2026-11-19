@@ -21,6 +21,12 @@ export interface Config {
   wikipediaApiUrl: string;
   /** Optional Pexels key: stock food photos when Wikipedia has none. */
   pexelsApiKey?: string;
+  /** Folder for the SQLite cache and household history (a persistent volume in production). */
+  dataDir?: string;
+  /** Extra trusted recipe sites, "Chinese: a.com, b.com; Korean: c.com". */
+  recipeSites?: string;
+  /** Optional self-hosted SearXNG, for dishes the trusted sites' indexes don't have. */
+  searxngUrl?: string;
   mealdbKey: string;
   /** Override for TheMealDB's base URL (testing or a mirror). */
   mealdbBaseUrl: string;
@@ -115,7 +121,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   if (!mealieToken) problems.push("MEALIE_TOKEN is required (Mealie > your profile > API Tokens)");
   else if (/\s/.test(mealieToken)) problems.push("MEALIE_TOKEN contains spaces or line breaks; paste it again as one line");
-  for (const name of ["MEALIE_PUBLIC_URL", "MEALDB_BASE_URL", "WIKIPEDIA_API_URL"]) {
+  for (const name of ["MEALIE_PUBLIC_URL", "MEALDB_BASE_URL", "WIKIPEDIA_API_URL", "SEARXNG_URL"]) {
     const v = get(name);
     const p = v ? urlProblem(name, v) : undefined;
     if (p) problems.push(p);
@@ -153,6 +159,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     householdContext: get("HOUSEHOLD_CONTEXT") ?? "a busy family",
     wikipediaApiUrl: get("WIKIPEDIA_API_URL") ?? "https://en.wikipedia.org/w/api.php",
     pexelsApiKey: get("PEXELS_API_KEY"),
+    dataDir: get("DATA_DIR"),
+    recipeSites: get("RECIPE_SITES"),
+    searxngUrl: get("SEARXNG_URL")?.replace(/\/+$/, ""),
     mealdbKey: get("MEALDB_API_KEY") ?? "1",
     mealdbBaseUrl: get("MEALDB_BASE_URL") ?? "https://www.themealdb.com",
     timezone,

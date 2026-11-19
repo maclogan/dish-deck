@@ -11,6 +11,23 @@ services:
     # build: .
     container_name: dish-deck
     env_file: .env
+    environment:
+      DATA_DIR: /data
+    volumes:
+      # Recipe cache and household history (kept between updates).
+      - ./data:/data
     ports:
       - "8080:8080"
+    restart: unless-stopped
+
+  # Optional free search fallback: `docker compose --profile search up -d`, then in .env set
+  #   SEARXNG_URL=http://searxng:8080
+  searxng:
+    image: docker.io/searxng/searxng:latest
+    profiles: [search]
+    container_name: searxng
+    environment:
+      SEARXNG_SECRET: change-me-to-a-long-random-string
+    volumes:
+      - ./deploy/searxng/settings.yml:/etc/searxng/settings.yml:ro
     restart: unless-stopped

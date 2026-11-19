@@ -255,13 +255,32 @@ const AI_DISHES: [string, string, string][] = [
   ["Mystery Grandma Stew", "", "Yunnan"], ["Scallion Pancakes", "葱油饼", "Shanghai and Jiangsu-Zhejiang"],
 ];
 let aiCursor = 0;
-app.post<{ Body: { messages: { content: string }[] } }>("/v1/messages", async (req) => {
-  await new Promise((r) => setTimeout(r, 1500));
+let dishCalls = 0;
+app.post<{ Body: { messages: { content: string }[]; tool_choice?: { name?: string } } }>("/v1/messages", async (req) => {
+  await new Promise((r) => setTimeout(r, 1200));
   const prompt = req.body.messages[0]?.content ?? "";
-  const want = Number(/Suggest (\d+)/.exec(prompt)?.[1] ?? 6);
-  const recipes = Array.from({ length: want }, () => {
-    const [name, nativeName, region] = AI_DISHES[aiCursor % AI_DISHES.length]!;
-    const title = `${name}${aiCursor >= AI_DISHES.length ? ` ${Math.floor(aiCursor / AI_DISHES.length) + 1}` : ""}`;
+  const reply = (name: string, input: unknown) => ({
+    id: "msg_mock", type: "message", role: "assistant", model: "mock", stop_reason: "tool_use", stop_sequence: null,
+    usage: { input_tokens: 1, output_tokens: 1 },
+    content: [{ type: "tool_use", id: "toolu_mock", name, input }],
+  });
+  // Names only (the cheap first step): the real dishes, then numbered extras on later calls.
+  if (req.body.tool_choice?.name === "suggest_dishes") {
+    dishCalls++;
+    console.log(`[mock claude] dish names call #${dishCalls}`);
+    const dishes = AI_DISHES.map(([name, nativeName, region]) => ({
+      name: dishCalls > 1 ? `${name} (batch ${dishCalls})` : name,
+      nativeName: nativeName || undefined, region, cuisine: "Chinese", suits: ["dinner", "lunch"],
+      aliases: [name, name.replace(/-/g, " ")], wikipediaTitle: name.startsWith("Mystery") ? undefined : name,
+    }));
+    return reply("suggest_dishes", { dishes });
+  }
+  const only = /exactly as named: (.+?)\. Cooking for/.exec(prompt)?.[1]?.split("; ").map((d) => d.replace(/\s*\(.*\)$/, "").replace(/\s+\p{Script=Han}+.*$/u, ""));
+  const want = only?.length ?? Number(/Suggest (\d+)/.exec(prompt)?.[1] ?? 6);
+  const recipes = Array.from({ length: want }, (_, i) => {
+    const pick = AI_DISHES[aiCursor % AI_DISHES.length]!;
+    const [name, nativeName, region] = only ? [only[i]!, "", "Chinese home cooking"] : pick;
+    const title = only ? name : `${name}${aiCursor >= AI_DISHES.length ? ` ${Math.floor(aiCursor / AI_DISHES.length) + 1}` : ""}`;
     aiCursor++;
     return {
       title, nativeName: nativeName || undefined, region,
@@ -272,11 +291,61 @@ app.post<{ Body: { messages: { content: string }[] } }>("/v1/messages", async (r
       tags: ["weeknight"], nutrition: { calories: 520, protein: 34, carbs: 48, fat: 18, fiber: 5 },
     };
   });
-  return {
-    id: "msg_mock", type: "message", role: "assistant", model: "mock", stop_reason: "tool_use", stop_sequence: null,
-    usage: { input_tokens: 1, output_tokens: 1 },
-    content: [{ type: "tool_use", id: "toolu_mock", name: "suggest_recipes", input: { recipes } }],
+  return reply("suggest_recipes", { recipes });
+});
+
+// ---------------------------------------------------------------- fake recipe sites
+// Start the app with DEV_SITE_PROXY=http://localhost:9100 and requests to the trusted sites come here.
+// thewoksoflife.com has most of the dishes; "Cumin Lamb" is on the site but missing from its sitemap (the
+// search fallback finds it); "Lion's Head Meatballs" and "Mystery Grandma Stew" aren't anywhere (AI writes them).
+const SITE_DISHES: Record<string, string[]> = {
+  "thewoksoflife.com": ["Fish-Fragrant Eggplant (Yu Xiang Qie Zi)", "Tomato Egg Stir-fry", "Hong Shao Rou (Red Braised Pork Belly)", "Steamed Fish with Ginger and Scallion", "Sichuan Dry Fried Green Beans", "Pork and Chinese Chive Dumplings", "Three Cup Chicken (San Bei Ji)", "Hot and Sour Shredded Potatoes", "Scallion Pancakes", "Cumin Lamb"],
+  "redhousespice.com": ["Mapo Tofu", "Dan Dan Noodles", "Twice Cooked Pork", "Chinese Chicken and Mushroom Soup"],
+};
+const UNLISTED = new Set(["Cumin Lamb"]);
+const slug = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+const siteDish = (domain: string, s: string) => SITE_DISHES[domain]?.find((d) => slug(d) === s);
+app.get<{ Params: { domain: string; "*": string } }>("/site/:domain/*", async (req, reply) => {
+  const { domain } = req.params;
+  const rest = req.params["*"].replace(/\/$/, "");
+  const dishes = SITE_DISHES[domain];
+  if (!dishes) return reply.code(404).send("not found");
+  const base = `https://${domain}`;
+  if (rest === "robots.txt") return reply.type("text/plain").send(`User-agent: *\nDisallow: /wp-admin/\nSitemap: ${base}/sitemap_index.xml\n`);
+  if (rest === "sitemap_index.xml") {
+    return reply.type("application/xml").send(`<?xml version="1.0"?><sitemapindex><sitemap><loc>${base}/post-sitemap.xml</loc></sitemap><sitemap><loc>${base}/page-sitemap.xml</loc></sitemap><sitemap><loc>${base}/category-sitemap.xml</loc></sitemap></sitemapindex>`);
+  }
+  if (rest === "post-sitemap.xml") {
+    const urls = dishes.filter((d) => !UNLISTED.has(d)).map((d) => `<url><loc>${base}/${slug(d)}/</loc><lastmod>2026-10-01</lastmod></url>`);
+    return reply.type("application/xml").send(`<?xml version="1.0"?><urlset>${urls.join("")}<url><loc>${base}/about/</loc></url><url><loc>${base}/our-favorite-woks-buying-guide/</loc></url></urlset>`);
+  }
+  if (rest === "page-sitemap.xml" || rest === "category-sitemap.xml") return reply.code(500).send("should not be read");
+  if (rest === "our-favorite-woks-buying-guide") return reply.type("text/html").send("<html><body><h1>Woks we love</h1></body></html>");
+  const name = siteDish(domain, rest);
+  if (!name) return reply.code(404).send("not found");
+  const ld = {
+    "@context": "https://schema.org",
+    "@graph": [
+      { "@type": "WebPage", name },
+      {
+        "@type": ["Recipe"], name, description: `${name}, the way we make it at home.`,
+        image: [`http://localhost:9100/img/${(hashText(name) % 40) + 1}.svg`],
+        recipeYield: ["4", "4 servings"], prepTime: "PT15M", cookTime: "PT25M", recipeCuisine: ["Chinese"], recipeCategory: ["Main Course"],
+        keywords: "home cooking, weeknight",
+        recipeIngredient: ["1 lb pork belly &amp; skin", "2 tbsp Shaoxing wine", "1 tbsp Pixian doubanjiang", "3 scallions"],
+        recipeInstructions: [{ "@type": "HowToSection", name: "Prep", itemListElement: [{ "@type": "HowToStep", text: "Cut everything into even pieces." }] }, { "@type": "HowToStep", text: "Stir-fry over high heat until fragrant, then braise." }],
+      },
+    ],
   };
+  return reply.type("text/html").send(`<html><head><script type="application/ld+json">${JSON.stringify(ld)}</script></head><body><h1>${name}</h1></body></html>`);
+});
+
+// ---------------------------------------------------------------- fake SearXNG (SEARXNG_URL=http://localhost:9100)
+app.get<{ Querystring: { q?: string } }>("/search", async (req) => {
+  const q = (req.query.q ?? "").toLowerCase();
+  const domain = /site:(\S+)/.exec(q)?.[1] ?? "";
+  const hits = (SITE_DISHES[domain] ?? []).filter((d) => q.includes(d.toLowerCase().split(" ")[0]!));
+  return { results: hits.map((d) => ({ url: `https://${domain}/${slug(d)}/`, title: d })) };
 });
 
 app.listen({ port: 9100, host: "0.0.0.0" }).then(() => console.log("mock Mealie + TheMealDB on :9100"));
