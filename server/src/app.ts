@@ -106,6 +106,19 @@ function safeEqual(a: string, b: string) {
   return ab.length === bb.length && timingSafeEqual(ab, bb);
 }
 
+/** Most-cooked cuisines first (the app shows the top 15 until "More"), then the rest A–Z. */
+const POPULAR_CUISINES = [
+  "Italian", "Mexican", "Chinese", "American", "Indian", "Japanese", "Thai", "Greek", "French", "Spanish",
+  "Korean", "Vietnamese", "Mediterranean", "Middle Eastern", "Turkish", "British", "Moroccan", "Jamaican",
+];
+export function rankCuisines(list: string[]): string[] {
+  const rank = (c: string) => {
+    const i = POPULAR_CUISINES.indexOf(c);
+    return i === -1 ? POPULAR_CUISINES.length : i;
+  };
+  return [...list].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+}
+
 export function buildApp(config: Config, overrides: Partial<{ service: Service; mealie: MealieClient }> = {}): FastifyInstance {
   const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? "info" } });
   const mealie = overrides.mealie ?? new MealieClient(config.mealieUrl, config.mealieToken);
@@ -156,7 +169,7 @@ export function buildApp(config: Config, overrides: Partial<{ service: Service; 
       passcodeRequired: !!config.appPasscode,
       busyDays: config.busyDays,
       mealieUrl: config.mealiePublicUrl,
-      cuisines: cuisines.filter((c) => c !== "Unknown"),
+      cuisines: rankCuisines(cuisines.filter((c) => c !== "Unknown")),
       categories,
       dietary: DIETS,
       meals: MEALS,

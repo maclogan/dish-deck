@@ -39,6 +39,8 @@
 
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; overflow-x: clip; }
+/* No pull-to-refresh: a downward swipe should never reload the app (Chrome reads this from the root). */
+html { overscroll-behavior-y: none; }
 body {
   background: var(--bg);
   color: var(--ink);
@@ -118,6 +120,9 @@ button.ai-on { border: 0; cursor: pointer; transition: color .15s, background .1
 .chip-row::-webkit-scrollbar { display: none; }
 .pill { flex: none; border: 1px solid var(--line); background: var(--bg); padding: 7px 12px; border-radius: 99px; font-size: 14px; }
 .pill.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.pill.more { border-style: dashed; color: var(--ink-2); font-weight: 600; }
+.chip-wrap { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 0 4px; }
+.filters-done { margin-top: 6px; }
 
 .toggle { display: flex; align-items: center; gap: 10px; font-weight: 600; cursor: pointer; user-select: none; }
 .toggle input { position: absolute; opacity: 0; pointer-events: none; }
@@ -136,6 +141,21 @@ button.ai-on { border: 0; cursor: pointer; transition: color .15s, background .1
 .stepper strong { color: var(--ink); min-width: 1ch; text-align: center; font-size: 17px; }
 
 .note { margin: 10px 2px 0; font-size: 13px; color: var(--ink-2); }
+.loading-note { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.spinner.small { width: 14px; height: 14px; border-width: 2px; flex: none; }
+
+/* A fresh deck is loading: the old one dims and stops taking swipes. */
+.deck-holder { position: relative; }
+.deck-holder.refreshing .deck-wrap { opacity: .35; filter: saturate(.6); pointer-events: none; transition: opacity .2s; }
+.deck-loading {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  pointer-events: none; animation: fade .2s;
+}
+.deck-loading-pill {
+  display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-radius: 99px;
+  background: var(--surface); box-shadow: var(--shadow); font-weight: 600; color: var(--ink);
+}
+.deck-loading-pill .spinner { width: 20px; height: 20px; border-width: 2.5px; }
 
 /* ---------- deck */
 .deck-wrap { display: flex; flex-direction: column; align-items: center; margin-top: 12px; }
@@ -224,9 +244,15 @@ button.ai-on { border: 0; cursor: pointer; transition: color .15s, background .1
   width: min(100%, 560px); max-height: 88dvh; background: var(--bg); border-radius: 24px 24px 0 0; display: flex; flex-direction: column;
   padding: 8px 18px calc(env(safe-area-inset-bottom) + 18px); animation: up .22s cubic-bezier(.2,.8,.3,1);
 }
-.sheet-handle { width: 40px; height: 5px; border-radius: 3px; background: var(--line); margin: 4px auto 10px; flex: none; }
+.sheet-grab { flex: none; touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none; }
+.sheet-grab:active { cursor: grabbing; }
+/* A 40x5 bar with a bigger invisible tap target around it. */
+.sheet-handle { display: block; position: relative; width: 72px; height: 24px; margin: -4px auto 2px; padding: 0; border: 0; background: none; cursor: inherit; }
+.sheet-handle::before { content: ""; position: absolute; left: 16px; right: 16px; top: 9px; height: 5px; border-radius: 3px; background: var(--line); }
+.sheet-handle:focus-visible { outline: 2px solid var(--tomato); outline-offset: -2px; border-radius: 8px; }
 .sheet-title { font-size: 21px; margin-bottom: 12px; }
-.sheet-body { overflow-y: auto; overscroll-behavior: contain; }
+.sheet-body { overflow-y: auto; overscroll-behavior: contain; min-height: 0; }
+.sheet { will-change: transform; }
 @keyframes up { from { transform: translateY(40px); opacity: 0; } }
 @keyframes fade { from { opacity: 0; } }
 

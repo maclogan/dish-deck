@@ -146,7 +146,8 @@ export class Service {
           goals: GOAL_IDS.filter((g) => fitsGoals(card, [g])),
         },
         rating: r.rating ?? undefined,
-        addedAt: r.dateAdded ?? r.createdAt ?? undefined,
+        // createdAt is a full timestamp; dateAdded is only the day, so it can't order same-day saves.
+        addedAt: r.createdAt ?? r.dateAdded ?? undefined,
       };
     });
     return { recipes };
@@ -234,8 +235,9 @@ export class Service {
     const dietary = req.dietary ?? [];
     const goals = req.goals ?? [];
     const mood = req.mood?.trim();
-    // Nutrition goals can only be checked with AI estimates, so they also trigger AI ideas.
-    const useAi = !!this.deps.ai && req.ai !== false && (!!mood || goals.length > 0);
+    // With AI ideas on (the default when an API key is set), every "New ideas" deal comes from Claude;
+    // turning it off sends everything to TheMealDB.
+    const useAi = !!this.deps.ai && req.ai !== false;
 
     let cards: Card[] | undefined;
     let note = "";
@@ -253,7 +255,8 @@ export class Service {
           count: Math.max(req.count, 6),
           onHand: onHand?.matcher.names,
           leniency: req.leniency,
-          avoid: [...book.map((r) => r.name)],
+          // AI ideas already dealt this session (their keys are slugs of the title) first, then saved recipes.
+          avoid: [...req.exclude.filter((k) => k.startsWith("ai:")).map((k) => k.slice(3).replace(/-/g, " ")).reverse(), ...book.map((r) => r.name)],
           bookSample: book.map((r) => r.name),
         });
         if (!generated.length) throw new Error("AI returned no recipes");

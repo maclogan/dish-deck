@@ -19,11 +19,12 @@ import type { Action } from "./Deck";
 import { DetailSheet } from "./DetailSheet";
 import { PlanSheet, dayLabel } from "./PlanSheet";
 
-type Sort = "name" | "newest" | "quickest" | "rating" | "onhand";
+type Sort = "name" | "newest" | "oldest" | "quickest" | "rating" | "onhand";
 
 const SORTS: { id: Sort; label: string }[] = [
   { id: "name", label: "Name (A–Z)" },
-  { id: "newest", label: "Newest" },
+  { id: "newest", label: "Newest saved" },
+  { id: "oldest", label: "Oldest saved" },
   { id: "quickest", label: "Quickest" },
   { id: "rating", label: "Top rated" },
   { id: "onhand", label: "Fewest missing" },
@@ -38,12 +39,23 @@ function loadSort(): Sort {
 
 const norm = (s: string) => s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
 const missingCount = (r: BookRecipe) => (r.onHand && r.onHand.total > 0 ? r.onHand.missing.length : Infinity);
+/** Milliseconds since the epoch the recipe was saved, or NaN when unknown. */
+const savedAt = (r: BookRecipe) => (r.addedAt ? Date.parse(r.addedAt) : NaN);
+/** Order by save time; recipes without a date go last either way. */
+const bySaved = (dir: 1 | -1) => (a: BookRecipe, b: BookRecipe) => {
+  const x = savedAt(a);
+  const y = savedAt(b);
+  if (Number.isNaN(x) || Number.isNaN(y)) return Number.isNaN(x) === Number.isNaN(y) ? 0 : Number.isNaN(x) ? 1 : -1;
+  return (x - y) * dir;
+};
 
 function compare(sort: Sort): (a: BookRecipe, b: BookRecipe) => number {
   const byName = (a: BookRecipe, b: BookRecipe) => a.title.localeCompare(b.title);
   switch (sort) {
     case "newest":
-      return (a, b) => (b.addedAt ?? "").localeCompare(a.addedAt ?? "") || byName(a, b);
+      return (a, b) => bySaved(-1)(a, b) || byName(a, b);
+    case "oldest":
+      return (a, b) => bySaved(1)(a, b) || byName(a, b);
     case "quickest":
       return (a, b) => (a.totalMinutes ?? Infinity) - (b.totalMinutes ?? Infinity) || byName(a, b);
     case "rating":
@@ -214,7 +226,7 @@ export function Recipes(props: {
               <div class="filter-label">
                 Category &amp; tags <span class="filter-hint">pick any</span>
               </div>
-              <MultiPills options={tags} selected={pickedTags} onChange={setPickedTags} />
+              <MultiPills options={tags} selected={pickedTags} onChange={setPickedTags} limit={15} />
             </>
           )}
         </div>
