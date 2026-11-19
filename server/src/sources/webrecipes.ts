@@ -357,7 +357,8 @@ const locs = (xml: string) =>
   }));
 
 /** Child sitemaps worth reading: posts and recipes, not pages, tags, authors, products or images. */
-const USEFUL_CHILD = (url: string) => !/(page|category|categories|tag|author|attachment|product|web-?story|stories|video|image|locations?|glossary)[-_]?sitemap|sitemap[-_](page|category|tag|author|taxonomies|users|attachment|product)|wp-sitemap-(taxonomies|users)|-sitemap-(page|tags?|category)/i.test(url);
+const USEFUL_CHILD = (url: string) =>
+  !/(page|category|categories|tag|author|attachment|product|web-?story|stories|video|image|locations?|glossary|ingredients?|cuisines?|courses?|diets?|keywords?|collections?|wprm_[a-z_]+|recipe[-_]?(tags?|categor(y|ies)|cuisines?|courses?))[-_]?sitemap|sitemap[-_](page|category|tag|author|taxonomies|users|attachment|product)|wp-sitemap-(taxonomies|users)|-sitemap-(page|tags?|category)/i.test(url);
 
 // ------------------------------------------------------------------ the service
 
@@ -457,12 +458,17 @@ export class RecipeSites {
     const seenMaps = new Set<string>();
     const queue = [...candidates];
     let children = 0;
+    /** Sitemaps that answered 200 but held no sitemap XML (some sites send bots an empty page). */
+    let empty = 0;
     while (queue.length && pages.size < MAX_PAGES_PER_SITE) {
       const map = queue.shift()!;
       if (seenMaps.has(map)) continue;
       seenMaps.add(map);
       const xml = await this.get(map, "application/xml,text/xml;q=0.9,*/*;q=0.5").catch(() => undefined);
-      if (!xml || !/<(urlset|sitemapindex)/i.test(xml)) continue;
+      if (!xml || !/<(urlset|sitemapindex)/i.test(xml)) {
+        if (this.lastStatus.get(map) === 200) empty++;
+        continue;
+      }
       for (const e of locs(xml)) {
         if (!e.loc) continue;
         if (e.kind === "sitemap") {
@@ -490,7 +496,12 @@ export class RecipeSites {
       // Say what happened to each address tried, e.g. "sitemap_index.xml 403", to tell blocking from no sitemap.
       const tried = [`${base}/robots.txt`, ...seenMaps].map((u) => `${u.replace(base, "").replace(/^https?:\/\/[^/]+/, "") || u} ${this.lastStatus.get(u) ?? "failed"}`);
       const blocked = [...seenMaps, `${base}/robots.txt`].some((u) => [401, 403, 429, 503].includes(this.lastStatus.get(u) ?? 0));
-      throw new Error(`${blocked ? "the site blocked the request" : "no sitemap with recipe pages found"} (${tried.join(", ")})`);
+      const why = blocked
+        ? "the site blocked the request"
+        : empty > 0 && empty === seenMaps.size
+          ? "every sitemap came back empty (the site may be refusing automated requests)"
+          : "no sitemap with recipe pages found";
+      throw new Error(`${why} (${tried.join(", ")})`);
     }
     // Leave out anything robots.txt asks crawlers not to fetch.
     const rules = parseRobots(robots ?? "");
