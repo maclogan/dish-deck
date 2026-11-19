@@ -24,9 +24,10 @@ import {
   mealDbCategoryForDiet,
   mealLabel,
   parseNutrient,
+  styleLabel,
 } from "./filters.js";
 import { classifyRecipe, planWeek, slotKey, type ExistingSlot } from "./planner.js";
-import type { AiRecipes } from "./sources/ai.js";
+import type { AiCard, AiRecipes } from "./sources/ai.js";
 import { mealDbToCard, type MealDb } from "./sources/mealdb.js";
 import type {
   ApplyRequest,
@@ -45,12 +46,15 @@ import type {
   WeekResponse,
 } from "./types.js";
 import { addDays, mapLimit, normalize, parseMinutes, planDates, toIsoDuration } from "./util.js";
+import type { PhotoFinder, PhotoQuery } from "./sources/photos.js";
 
 export interface Deps {
   config: Config;
   mealie: MealieClient;
   mealdb: MealDb;
   ai?: AiRecipes;
+  /** Finds photos for AI ideas and for Mealie recipes that have none. */
+  photos?: PhotoFinder;
   now?: () => Date;
   /** Reports recoverable problems (e.g. an AI failure we fell back from). */
   warn?: (message: string) => void;
@@ -208,13 +212,34 @@ export class Service {
     return { cards: out, note: out.length ? note : `${note}: nothing matched` };
   }
 
+  /** A looked-up photo as card fields ({} when there's none or no finder). */
+  private async foundPhoto(q: PhotoQuery): Promise<Pick<Card, "image" | "imageCredit">> {
+    const photo = await this.deps.photos?.find(q);
+    return photo ? { image: photo.url, imageCredit: photo.credit } : {};
+  }
+
+  /**
+   * Give AI ideas real photos and drop the ones without (a card has to show the dish). Without a photo
+   * finder (tests, or lookups turned off) the cards pass through as they are.
+   */
+  private async withPhotos(cards: AiCard[]): Promise<Card[]> {
+    const done = await mapLimit(cards, 4, async ({ photoHint, ...card }) => {
+      if (!this.deps.photos) return card as Card;
+      const found = await this.foundPhoto({ title: card.title, wikipediaTitle: photoHint.wikipediaTitle, search: photoHint.search });
+      return found.image ? { ...card, ...found } : undefined;
+    });
+    const kept = done.filter((c): c is Card => !!c);
+    if (kept.length < cards.length) this.deps.warn?.(`Dropped ${cards.length - kept.length} AI idea(s) with no photo`);
+    return kept;
+  }
+
   private async cardFromMealie(r: MealieRecipe, ingredients: string[], missing?: string[]): Promise<Card> {
     return {
       key: `mealie:${r.id}`,
       source: "mealie",
       title: r.name,
       description: r.description || undefined,
-      image: r.image ? this.imageUrl(r.id, r.image) : undefined,
+      ...(r.image ? { image: this.imageUrl(r.id, r.image) } : await this.foundPhoto({ title: r.name })),
       tags: (r.tags ?? []).map((t) => t.name),
       category: r.recipeCategory?.[0]?.name,
       totalMinutes: r.totalTimeSeconds ? Math.round(r.totalTimeSeconds / 60) : parseMinutes(r.totalTime),
@@ -236,9 +261,10 @@ export class Service {
     const goals = req.goals ?? [];
     const mood = req.mood?.trim();
     const aiAllowed = !!this.deps.ai && req.ai !== false;
-    // AI is for a typed craving or nutrition goals (only AI can estimate nutrition); plain browsing
-    // uses TheMealDB, which is free. AI also steps in when TheMealDB has nothing for these filters.
-    const aiFirst = aiAllowed && (!!mood || goals.length > 0);
+    // AI handles a typed craving, a cuisine (TheMealDB's cuisine lists are short and lean on Western
+    // takeout dishes) and nutrition goals (only AI can estimate nutrition). Plain browsing uses TheMealDB,
+    // which is free; AI also steps in when TheMealDB has nothing for these filters.
+    const aiFirst = aiAllowed && (!!mood || goals.length > 0 || req.cuisines.length > 0);
 
     /** Ask Claude; undefined if it fails or nothing it returns passes the filters. */
     const aiIdeas = async (): Promise<Card[] | undefined> => {
@@ -250,7 +276,9 @@ export class Service {
           dietary,
           meals: req.meals,
           goals,
-          count: Math.max(req.count, 6),
+          style: req.style,
+          // A few extra, since ideas without a findable photo are dropped.
+          count: Math.min(Math.max(req.count, 6) + 2, 12),
           onHand: onHand?.matcher.names,
           leniency: req.leniency,
           // AI ideas already dealt this session (their keys are slugs of the title) first, then saved recipes.
@@ -261,7 +289,9 @@ export class Service {
         // Double-check the model's work: drop anything that breaks a restriction or misses a goal.
         const fit = generated.filter((c) => fitsDiet(c.ingredients, dietary) && fitsGoals(c, goals));
         if (!fit.length) throw new Error("none of the AI recipes met the filters");
-        return fit;
+        const pictured = await this.withPhotos(fit.filter((c) => !seen.has(c.key) && !bookNames.has(normalize(c.title))));
+        if (!pictured.length) throw new Error("no photos found for the AI recipes");
+        return pictured;
       } catch (err) {
         // Any Anthropic/API/parse failure: carry on without AI rather than failing the deal.
         this.deps.warn?.(`AI ideas failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -282,7 +312,9 @@ export class Service {
       }
       return { cards, suffix };
     };
-    const aiNote = () => (mood ? `AI ideas for "${mood}"` : "AI ideas") + filterSuffix(req);
+    const style = req.style && req.style !== "home" ? ` · ${styleLabel(req.style)}` : "";
+    const aiNote = () =>
+      (mood ? `AI ideas for "${mood}"` : "AI ideas") + (req.cuisines.length ? ` · ${req.cuisines.join(" or ")}` : "") + style + filterSuffix(req);
 
     if (aiFirst) {
       const ai = await aiIdeas();
@@ -510,7 +542,7 @@ export function mealieNutrition(r: MealieRecipe): Nutrition | undefined {
 }
 
 export function toSchemaOrg(card: Card): Record<string, unknown> {
-  const keywords = [...card.tags, card.cuisine, "new to try"].filter(Boolean);
+  const keywords = [...card.tags, card.cuisine, card.region, "new to try"].filter(Boolean);
   // An explicit empty "suits" means not a lunch/dinner dish (e.g. dessert): keep its own category.
   const categories =
     card.suits && card.suits.length === 0
@@ -520,7 +552,8 @@ export function toSchemaOrg(card: Card): Record<string, unknown> {
     "@context": "https://schema.org",
     "@type": "Recipe",
     name: card.title,
-    description: card.description ?? "",
+    // Keep the native name with the recipe in Mealie, e.g. "鱼香茄子 · Sichuan. Silky eggplant in…".
+    description: [[card.nativeName, card.region].filter(Boolean).join(" · "), card.description].filter(Boolean).join(". "),
     image: card.image ? [card.image] : undefined,
     recipeYield: card.servings ? `${card.servings} servings` : undefined,
     totalTime: toIsoDuration(card.totalMinutes),

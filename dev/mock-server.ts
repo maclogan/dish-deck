@@ -83,6 +83,9 @@ const recipes: Recipe[] = [
   mk("Tomato Basil Soup", { ing: ["2 cans whole tomatoes", "1 onion", "1/2 cup cream", "basil"], cat: "Lunch", serves: 4 }),
   mk("Chocolate Chip Cookies", { ing: ["2 cups flour", "1 cup chocolate chips"], cat: "Dessert" }),
 ];
+// One saved recipe without a photo, to show the looked-up photo in the recipe book.
+recipes.find((r) => r.name === "Greek Salad")!.image = null;
+
 
 const foods = [
   { id: "f1", name: "chicken thigh", aliases: [{ name: "chicken thighs" }], householdsWithIngredientFood: ["family"] },
@@ -224,19 +227,47 @@ app.get<{ Params: { id: string } }>("/img/:id", async (req, reply) => {
   return reply.type("image/svg+xml").send(svg(id, ""));
 });
 
+// ---------------------------------------------------------------- fake Wikipedia (photo lookups)
+// Every article exists and has a photo, except the "Mystery" dish (to exercise dropping photo-less ideas).
+app.get<{ Querystring: Record<string, string> }>("/w/api.php", async (req) => {
+  const q = req.query;
+  const titles = q.generator === "search" ? [] : (q.titles ?? "").split("|");
+  return {
+    query: {
+      pages: titles.map((title) =>
+        /mystery|^$/i.test(title)
+          ? { title, missing: true }
+          : { title, pageimage: `${title.replace(/ /g, "_")}.jpg`, thumbnail: { source: `http://localhost:9100/img/${(hashText(title) % 40) + 1}.svg`, width: 960, height: 640 } },
+      ),
+    },
+  };
+});
+const hashText = (t: string) => [...t].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
+
 // ---------------------------------------------------------------- fake Claude (Messages API)
 // Start the app with ANTHROPIC_API_KEY=dev ANTHROPIC_BASE_URL=http://localhost:9100 to try AI mode offline.
-const AI_DISHES = ["Miso Butter Salmon", "Lemongrass Chicken Bowls", "Smoky Black Bean Chili", "Gochujang Pork Tacos", "Coconut Lentil Soup", "Herby Orzo Skillet", "Crispy Gnocchi Bake", "Ginger Scallion Noodles", "Chipotle Turkey Burgers", "Saag Paneer Wraps", "Harissa Chickpea Stew", "Peanut Tofu Stir-fry"];
+const AI_DISHES: [string, string, string][] = [
+  ["Fish-Fragrant Eggplant", "鱼香茄子", "Sichuan"], ["Tomato and Egg Stir-fry", "番茄炒蛋", "Chinese home cooking"],
+  ["Red-Braised Pork Belly", "红烧肉", "Hunan"], ["Steamed Fish with Ginger and Scallion", "清蒸鱼", "Cantonese"],
+  ["Dry-Fried Green Beans", "干煸四季豆", "Sichuan"], ["Pork and Chive Dumplings", "韭菜猪肉饺子", "Dongbei"],
+  ["Lion's Head Meatballs", "狮子头", "Shanghai and Jiangsu-Zhejiang"], ["Cumin Lamb", "孜然羊肉", "Xinjiang"],
+  ["Three Cup Chicken", "三杯鸡", "Taiwanese"], ["Hot and Sour Shredded Potatoes", "酸辣土豆丝", "Chinese home cooking"],
+  ["Mystery Grandma Stew", "", "Yunnan"], ["Scallion Pancakes", "葱油饼", "Shanghai and Jiangsu-Zhejiang"],
+];
 let aiCursor = 0;
 app.post<{ Body: { messages: { content: string }[] } }>("/v1/messages", async (req) => {
   await new Promise((r) => setTimeout(r, 1500));
   const prompt = req.body.messages[0]?.content ?? "";
   const want = Number(/Suggest (\d+)/.exec(prompt)?.[1] ?? 6);
   const recipes = Array.from({ length: want }, () => {
-    const title = `${AI_DISHES[aiCursor % AI_DISHES.length]}${aiCursor >= AI_DISHES.length ? ` ${Math.floor(aiCursor / AI_DISHES.length) + 1}` : ""}`;
+    const [name, nativeName, region] = AI_DISHES[aiCursor % AI_DISHES.length]!;
+    const title = `${name}${aiCursor >= AI_DISHES.length ? ` ${Math.floor(aiCursor / AI_DISHES.length) + 1}` : ""}`;
     aiCursor++;
     return {
-      title, description: "A quick, cozy weeknight idea.", cuisine: "Fusion", category: "Dinner", suits: ["dinner", "lunch"], servings: 4,
+      title, nativeName: nativeName || undefined, region,
+      // "Mystery Grandma Stew" has no article, so its card is dropped (no photo).
+      wikipediaTitle: name.startsWith("Mystery") ? undefined : name, photoSearch: name.startsWith("Mystery") ? "zzz" : name.toLowerCase(),
+      description: "A well-loved everyday dish.", cuisine: "Chinese", category: "Dinner", suits: ["dinner", "lunch"], servings: 4,
       prepMinutes: 10, cookMinutes: 20, ingredients: ["1 lb chicken thighs", "2 cups rice", "1 onion"], instructions: ["Prep.", "Cook.", "Serve."],
       tags: ["weeknight"], nutrition: { calories: 520, protein: 34, carbs: 48, fat: 18, fiber: 5 },
     };

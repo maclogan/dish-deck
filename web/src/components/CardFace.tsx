@@ -2,34 +2,27 @@ import { useState } from "preact/hooks";
 import type { Card } from "../api";
 import { IconClock, IconSparkle } from "../icons";
 
-const GRADIENTS = [
-  ["#E4572E", "#F2A65A"],
-  ["#5E8C61", "#A3C4A0"],
-  ["#3D5A80", "#98C1D9"],
-  ["#8E5572", "#D7A9C3"],
-  ["#B5651D", "#E8A33D"],
-  ["#2A9D8F", "#8AD1C2"],
-];
-
-function hash(text: string) {
-  let h = 0;
-  for (const ch of text) h = (h * 31 + ch.charCodeAt(0)) | 0;
-  return Math.abs(h);
-}
-
-export function Placeholder({ title }: { title: string }) {
-  const [a, b] = GRADIENTS[hash(title) % GRADIENTS.length]!;
+/**
+ * Shown only while a photo loads or if it fails to (the server makes sure every card has one): a quiet
+ * plate on a soft background rather than a stand-in "picture".
+ */
+export function Placeholder() {
   return (
-    <div class="placeholder" style={{ background: `linear-gradient(135deg, ${a}, ${b})` }}>
-      <span>{title.trim().charAt(0).toUpperCase()}</span>
+    <div class="placeholder" aria-hidden="true">
+      <svg viewBox="0 0 64 64" width="56" height="56" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+        <circle cx="32" cy="34" r="17" />
+        <circle cx="32" cy="34" r="10" opacity=".5" />
+        <path d="M9 14v10a4 4 0 0 0 8 0V14M13 14v34" />
+        <path d="M55 14c-4 2-6 7-6 13h6v21" />
+      </svg>
     </div>
   );
 }
 
-/** Recipe photo that falls back to the gradient placeholder when missing or when it fails to load. */
+/** Recipe photo, with the plate placeholder while it's missing or if it fails to load. */
 export function RecipeImage({ card, lazy = true }: { card: Pick<Card, "image" | "title">; lazy?: boolean }) {
   const [failed, setFailed] = useState<string | undefined>();
-  if (!card.image || failed === card.image) return <Placeholder title={card.title} />;
+  if (!card.image || failed === card.image) return <Placeholder />;
   return (
     <img src={card.image} alt="" loading={lazy ? "lazy" : undefined} draggable={false} onError={() => setFailed(card.image)} />
   );
@@ -59,8 +52,10 @@ export function CardFace({ card }: { card: Card }) {
       </div>
       <div class="card-text">
         <h3>{card.title}</h3>
+        {card.nativeName && <p class="native-name" lang="und">{card.nativeName}</p>}
         <div class="chips">
           {card.cuisine && <span class="chip">{card.cuisine}</span>}
+          {card.region && card.region !== card.cuisine && <span class="chip">{card.region}</span>}
           {card.category && card.category !== card.cuisine && <span class="chip">{card.category}</span>}
           {card.totalMinutes ? (
             <span class="chip">

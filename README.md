@@ -11,7 +11,9 @@ Dish Deck is a small, mobile-first web app you install on your phone (it's a PWA
 
 - **Swipe deck**
   - Drag a card **top-right** to save it to Mealie, **bottom-right** to save it *and* put it on a day's lunch or dinner, **left** to skip. Tap a card for ingredients and steps.
-  - **New ideas** come from [TheMealDB](https://www.themealdb.com) (free). With an API key and the **AI** switch on, Claude handles typed cravings and nutrition goals, and fills the deck whenever TheMealDB has nothing new for your filters. Flipping the switch keeps your filters and the card you're looking at.
+  - **New ideas** come from [TheMealDB](https://www.themealdb.com) (free). With an API key and the **AI** switch on, Claude handles typed cravings, cuisines and nutrition goals, and fills the deck whenever TheMealDB has nothing new for your filters. Flipping the switch keeps your filters and the card you're looking at.
+  - **Authentic by default**: AI ideas are home-style cooking from each cuisine's regions (rotating, e.g. Sichuan and Dongbei one deal, Cantonese and Yunnan the next), with the dish's native name. The **Style** filter switches to *Weeknight shortcuts* or *Takeout favorites*.
+  - **Every card has a real photo**: AI ideas (and saved recipes without a picture) get one from Wikipedia, or Pexels if you add a key; ideas with no photo are skipped.
   - Tap a card and drag its sheet down (or tap the backdrop) to close it.
   - **Our recipes** is your recipe book: every saved Mealie recipe in one grid of cards (see below).
 - **"What sounds good?"**: type a mood ("cozy soup", "something with salmon") or pick a cuisine or dish type.
@@ -148,6 +150,8 @@ Every setting is documented in [`example.env`](example.env). Variables set in th
 | `ANTHROPIC_API_KEY` | (none) | Turns on AI ideas |
 | `ANTHROPIC_MODEL` | `claude-haiku-5-5` | Claude model for AI ideas |
 | `HOUSEHOLD_CONTEXT` | `a busy family` | A few words about who you cook for, used in AI prompts |
+| `PEXELS_API_KEY` | (none) | Optional free [Pexels](https://www.pexels.com/api/) key: stock food photos when Wikipedia has none |
+| `WIKIPEDIA_API_URL` | `https://en.wikipedia.org/w/api.php` | MediaWiki API used for dish photos (rarely changed) |
 | `MEALDB_API_KEY` | `1` | TheMealDB key |
 | `BUSY_DAYS` | (none) | Days needing quick dinners, e.g. `tue,thu` |
 | `PLAN_START` | `today` | First day of the 7-day plan: `today`, `tomorrow`, `monday`, `sunday` |
@@ -194,7 +198,7 @@ Dish Deck reads what's already in Mealie, so a little tidying there pays off:
 ## Costs and limits
 
 - **TheMealDB's free key** covers a limited catalog (a few hundred meals), so new ideas without AI start repeating eventually.
-- **AI ideas** cost one Claude API request per deal of cards. Haiku is the cheapest model, and you pay per use on your own key.
+- **AI ideas** cost one Claude API request per deal of cards (searches, cuisine picks, nutrition goals, and the fallback when TheMealDB runs dry). Haiku is the cheapest model, and you pay per use on your own key. Photo lookups (Wikipedia, Pexels) are free.
 - **Planner and saved-recipe features** run entirely against Mealie and cost nothing.
 
 ## Development

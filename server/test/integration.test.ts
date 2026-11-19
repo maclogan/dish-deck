@@ -5,6 +5,7 @@ import { MealieClient, type MealiePlanEntry, type MealieRecipe } from "../src/me
 import { Service, imageSig } from "../src/service.js";
 import type { AiRecipes } from "../src/sources/ai.js";
 import { MealDb } from "../src/sources/mealdb.js";
+import type { PhotoFinder } from "../src/sources/photos.js";
 import { mealieRecipe, teriyakiMeal } from "./fixtures.js";
 
 const config: Config = {
@@ -15,6 +16,7 @@ const config: Config = {
   mealieToken: "tok",
   anthropicModel: "claude-haiku-5-5",
   householdContext: "a busy family",
+  wikipediaApiUrl: "https://en.wikipedia.test/w/api.php",
   mealdbKey: "1",
   mealdbBaseUrl: "https://www.themealdb.com",
   timezone: "America/Denver",
@@ -202,6 +204,33 @@ describe("deck", () => {
       const down = { candidates: async () => { throw new Error("fetch failed"); } } as unknown as MealDb;
       const res = await withAi(ai, down).deck({ source: "new", onHand: false, leniency: 2, count: 4, exclude: [] });
       expect(res.cards.map((c) => c.source)).toEqual(["ai"]);
+    });
+
+    it("uses AI for a cuisine, passing the style along", async () => {
+      const { ai, asked } = fakeAi();
+      const res = await withAi(ai).deck({ source: "new", onHand: false, leniency: 2, count: 4, exclude: [], cuisines: ["Chinese"], style: "weeknight" });
+      expect(res.cards.map((c) => c.source)).toEqual(["ai"]);
+      expect((asked[0] as unknown as { style: string }).style).toBe("weeknight");
+      expect(res.note).toBe("AI ideas · Chinese · Weeknight shortcuts");
+    });
+
+    it("gives AI ideas photos and drops the ones without", async () => {
+      const ai = {
+        generate: async () => [
+          { key: "ai:mapo-tofu", source: "ai", title: "Mapo Tofu", tags: [], ingredients: ["1 block tofu"], instructions: ["Cook."], photoHint: { wikipediaTitle: "Mapo tofu" } },
+          { key: "ai:obscure", source: "ai", title: "Very Obscure Dish", tags: [], ingredients: ["1 cup rice"], instructions: ["Cook."], photoHint: {} },
+        ],
+      } as unknown as AiRecipes;
+      const photos = {
+        find: async (q: { wikipediaTitle?: string }) =>
+          q.wikipediaTitle === "Mapo tofu" ? { url: "https://upload.test/mapo.jpg", credit: { text: "Photo: Wikipedia", url: "https://w/File:Mapo.jpg" } } : undefined,
+      } as unknown as PhotoFinder;
+      const m = fakeMealie();
+      const service = new Service({ config, mealie: new MealieClient(config.mealieUrl, config.mealieToken, m.fetchImpl), mealdb: fakeMealDb(), ai, photos });
+      const res = await service.deck({ source: "new", mood: "tofu", onHand: false, leniency: 2, count: 4, exclude: [] });
+      expect(res.cards).toHaveLength(1);
+      expect(res.cards[0]).toMatchObject({ title: "Mapo Tofu", image: "https://upload.test/mapo.jpg", imageCredit: { text: "Photo: Wikipedia" } });
+      expect(res.cards[0]).not.toHaveProperty("photoHint");
     });
 
     it("leaves the deck empty when TheMealDB has nothing and AI is off", async () => {
