@@ -133,19 +133,22 @@ export class MealDb {
     if (mood?.trim()) {
       const text = normalize(mood);
       const [areas, allCats] = await Promise.all([this.areas(), this.categories()]);
-      const area = areas.find((a) => text.includes(normalize(a)));
-      const cat = allCats.find((c) => text.includes(normalize(c)));
-      if (area || cat) {
-        return this.candidates({
-          cuisines: area ? [area] : [],
-          categories: cat ? [cat] : [],
-          fallbackCategories: opts.fallbackCategories,
-          want,
-        });
-      }
-
+      const asCuisineOrType = (exact: boolean) => {
+        const match = (name: string) => (exact ? text === normalize(name) || text === `${normalize(name)} food` : text.includes(normalize(name)));
+        const area = areas.find(match);
+        const cat = allCats.find(match);
+        return area || cat
+          ? this.candidates({ cuisines: area ? [area] : [], categories: cat ? [cat] : [], fallbackCategories: opts.fallbackCategories, want })
+          : undefined;
+      };
+      // "Italian" or "beef" on its own means the whole cuisine or type...
+      const exact = asCuisineOrType(true);
+      if (exact) return exact;
+      // ...but "beef roll" is a dish: look for it by name before falling back to all beef dishes.
       const byName = await this.search(mood.trim());
       if (byName.length) return { refs: shuffle(byName), note: `Matches for "${mood.trim()}"` };
+      const loose = asCuisineOrType(false);
+      if (loose) return loose;
 
       const words = text.split(" ").filter((w) => w.length > 2);
       for (const phrase of [words.join(" "), ...words]) {

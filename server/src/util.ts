@@ -127,3 +127,17 @@ export function toIsoDuration(minutes: number | undefined): string | undefined {
   const m = minutes % 60;
   return `PT${h ? `${h}H` : ""}${m ? `${m}M` : ""}`;
 }
+
+/**
+ * Resolve with `work`, or with `fallback()` if it takes longer than `ms`. The work keeps running in the
+ * background (its result still lands in caches); its errors are swallowed once the fallback won.
+ */
+export function withTimeout<T>(work: Promise<T>, ms: number, fallback: () => T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<T>((resolve) => {
+    timer = setTimeout(() => resolve(fallback()), ms);
+    (timer as { unref?: () => void }).unref?.();
+  });
+  work.catch(() => undefined);
+  return Promise.race([work, late]).finally(() => clearTimeout(timer));
+}

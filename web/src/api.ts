@@ -47,15 +47,29 @@ export class ApiError extends Error {
   }
 }
 
+/** The server answers new-ideas decks within 55 s; give up a little after that instead of spinning. */
+const REQUEST_TIMEOUT_MS = 70_000;
+
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(path, {
-    method,
-    headers: {
-      ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
-      ...(passcode ? { "x-app-passcode": passcode } : {}),
-    },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), REQUEST_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      method,
+      headers: {
+        ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+        ...(passcode ? { "x-app-passcode": passcode } : {}),
+      },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal: abort.signal,
+    });
+  } catch (err) {
+    if (abort.signal.aborted) throw new Error("That took too long. Check your connection and try again.");
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
   const text = await res.text();
   let data: any;
   try {
