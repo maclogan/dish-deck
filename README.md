@@ -174,9 +174,6 @@ Every setting is documented in [`example.env`](example.env). Variables set in th
 | `STAPLES` | salt, pepper, water, oils, sugar, flour, butter | Ingredients never counted as missing |
 | `GOOGLE_MAPS_API_KEY` | (none) | Eat out tab: Google Places key (server only) |
 | `GOOGLE_MAPS_BROWSER_KEY` | (none) | Eat out tab: Map view key (restricted browser key) |
-| `DINING_DEFAULT_LOCATION` | (none) | Address to search around when a phone won't share its location |
-| `DINING_RADIUS_MILES` | `3` | Default search radius (0.25–30 miles) |
-| `DINING_UNITS` | `mi` | Distances in `mi` or `km` |
 | `PORT` | `8080` | Port to listen on |
 | `LOG_LEVEL` | `info` | `fatal`, `error`, `warn`, `info`, `debug` |
 | `ENV_FILE` | `.env` | Path of the env file to load (Node only) |
@@ -238,9 +235,9 @@ Recipes stay their authors' work: cards link to the original page, and saved rec
 
 The **Eat out** tab helps decide where to eat today and find new places. It appears when `GOOGLE_MAPS_API_KEY` is set.
 
-- **Where and when:** uses the phone's location (or type an address, or pick a saved Home/Work or recent spot) and a time today (now, lunch, dinner or any time). Opening hours are checked for that time.
+- **Where and when:** uses the phone's location (or type an address, or pick a saved Home/Work or recent spot; if the phone won't share its location, it starts from Denver, CO) and a time today (now, lunch, dinner or any time). Opening hours are checked for that time.
 - **Search for a vibe:** type what you're after ("cozy hole-in-the-wall", "date night", "cheap tacos open late"). With AI on, Claude turns it into a Google search plus filters, then reads each result's reviews and reranks them, with a line on why each one fits. With AI off it's a plain Google search.
-- **Filters:** distance, open at the chosen time, rating, price, chain or independent, cuisine, dine-in/takeout/delivery, outdoor seating, groups, kids, vegetarian, takes reservations. Sort by best match, nearest, top rated or **hidden gems** (well loved, not many reviews yet, independent).
+- **Filters:** distance (3 miles to start, up to 25), open at the chosen time, rating, price, chain or independent, cuisine, dine-in/takeout/delivery, outdoor seating, groups, kids, vegetarian, takes reservations. Sort by best match, nearest, top rated or **hidden gems** (well loved, not many reviews yet, independent).
 - **Each place shows** rating, price, distance, hours, chain or independent, its most important facts as tags, size, and whether you need a reservation, plus links to its **Google listing** and **website**. Open it for photos, directions, phone, an AI summary of reviews, *What locals say* (city subreddit, local blogs and news, via SearXNG), and Google's reviews. How busy a place gets isn't estimated; Google's popular times are on its Google listing.
 - **Display:** a List, Deck (one at a time, swipe) or Map view, remembered per phone.
 - **Today only:** star places to a shortlist and compare them side by side; swipe a place left to hide it for today. Both clear tomorrow and never affect future searches.

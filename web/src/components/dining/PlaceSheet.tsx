@@ -7,7 +7,6 @@ import { MetaLine, PlacePhoto, StatusChips } from "./PlaceCard";
 export function PlaceSheet(props: {
   place: PlaceSummary | null;
   moment: Moment;
-  units: "mi" | "km";
   chatterEnabled: boolean;
   shortlisted: boolean;
   onShortlist: (p: PlaceSummary) => void;
@@ -61,7 +60,7 @@ export function PlaceSheet(props: {
               </div>
             )}
           </div>
-          <MetaLine p={p} units={props.units} />
+          <MetaLine p={p} />
           {p.address && <p class="muted small">{p.address}</p>}
           {p.hoursToday && <p class="small">Today: {p.hoursToday}</p>}
           <StatusChips p={p} />

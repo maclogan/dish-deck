@@ -226,16 +226,6 @@ export class PlacesClient {
     return { label: p.displayName?.text ?? p.formattedAddress ?? "Chosen spot", lat: p.location.latitude, lng: p.location.longitude };
   }
 
-  /** Turn a typed address into a point (used once for DINING_DEFAULT_LOCATION). */
-  async geocode(text: string): Promise<({ label: string } & LatLng) | undefined> {
-    const data = await this.request<{ places?: GPlace[] }>("POST", "/v1/places:searchText", "places.id,places.formattedAddress,places.location", {
-      textQuery: text,
-      pageSize: 1,
-    });
-    const p = data.places?.[0];
-    return p?.location ? { label: text, lat: p.location.latitude, lng: p.location.longitude } : undefined;
-  }
-
   /** A place photo's bytes (Google redirects to the image). */
   async photo(name: string, maxWidth: number): Promise<{ body: ArrayBuffer; type: string } | undefined> {
     const url = new URL(`${this.baseUrl}/v1/${name}/media`);

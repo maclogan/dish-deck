@@ -29,7 +29,7 @@ export function EatOut(props: { config: AppConfigResponse; aiOn: boolean; notify
   const [submitted, setSubmitted] = useState("");
   const [filters, setFilters] = useState<DiningFilters>(loadFilters);
   const [sort, setSort] = useState<DiningSort>(loadSort);
-  const [radius, setRadius] = useState(() => Number(storageGet("dishdeck.dining.radius")) || dc.radiusMiles);
+  const [radius, setRadius] = useState(() => Math.min(dc.maxRadiusMiles, Number(storageGet("dishdeck.dining.radius")) || dc.radiusMiles));
   const [display, setDisplay] = useState<Display>(() => {
     const d = loadDisplay();
     return d === "map" && !dc.mapsBrowserKey ? "list" : d;
@@ -75,12 +75,10 @@ export function EatOut(props: { config: AppConfigResponse; aiOn: boolean; notify
       })
       .catch(async (err: Error) => {
         if (quiet && location) return;
-        const d = await api.dining.defaultLocation().catch(() => ({ location: null }));
-        if (d.location && !location) {
-          setLocation(d.location);
-          props.notify(`${err.message}: showing places near ${d.location.label}`);
-        } else if (!location) setError(`${err.message}. Set a location above.`);
-        else if (!quiet) props.notify(err.message, undefined, true);
+        if (!location) {
+          setLocation(dc.defaultLocation);
+          props.notify(`${err.message}: showing places near ${dc.defaultLocation.label}`);
+        } else if (!quiet) props.notify(err.message, undefined, true);
       })
       .finally(() => setLocating(false));
   };
@@ -249,13 +247,13 @@ export function EatOut(props: { config: AppConfigResponse; aiOn: boolean; notify
               <button class="btn" onClick={() => setToday((t) => ({ ...t, hidden: [] }))}>Show them again</button>
             </div>
           ) : display === "deck" ? (
-            <DiningDeck places={visible} units={dc.units} actions={actions} />
+            <DiningDeck places={visible} actions={actions} />
           ) : display === "map" && dc.mapsBrowserKey ? (
-            <MapView apiKey={dc.mapsBrowserKey} center={location} places={visible} units={dc.units} actions={actions} />
+            <MapView apiKey={dc.mapsBrowserKey} center={location} places={visible} actions={actions} />
           ) : (
             <div class="place-list">
               {visible.map((p) => (
-                <PlaceCard key={p.id} p={p} units={dc.units} actions={actions} />
+                <PlaceCard key={p.id} p={p} actions={actions} />
               ))}
               <p class="hint">Swipe a place left to hide it for today.</p>
             </div>
@@ -291,7 +289,8 @@ export function EatOut(props: { config: AppConfigResponse; aiOn: boolean; notify
         filters={filters}
         sort={sort}
         radius={radius}
-        units={dc.units}
+        maxRadius={dc.maxRadiusMiles}
+       
         cuisines={dc.cuisines}
         aiOn={props.aiOn}
         onClose={() => setShowFilters(false)}
@@ -308,7 +307,7 @@ export function EatOut(props: { config: AppConfigResponse; aiOn: boolean; notify
       <PlaceSheet
         place={open}
         moment={moment}
-        units={dc.units}
+       
         chatterEnabled={dc.chatter}
         shortlisted={!!open && isShortlisted(open.id)}
         onShortlist={actions.onShortlist}
@@ -318,7 +317,7 @@ export function EatOut(props: { config: AppConfigResponse; aiOn: boolean; notify
       <Compare
         open={compareOpen}
         places={today.shortlist}
-        units={dc.units}
+       
         onOpen={(p) => { setCompareOpen(false); setOpen(p); }}
         onRemove={actions.onShortlist}
         onClose={() => setCompareOpen(false)}

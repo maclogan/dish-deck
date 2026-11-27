@@ -98,7 +98,6 @@ export const api = {
         `/api/dining/autocomplete?${new URLSearchParams({ q, ...(near ? { lat: String(near.lat), lng: String(near.lng) } : {}) })}`,
       ),
     locate: (id: string) => call<{ label: string } & LatLng>("GET", `/api/dining/locate/${encodeURIComponent(id)}`),
-    defaultLocation: () => call<{ location: ({ label: string } & LatLng) | null }>("GET", "/api/dining/default-location"),
   },
 };
 

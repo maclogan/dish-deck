@@ -96,7 +96,6 @@ export function registerPlacesMock(app: FastifyInstance, svg: (seed: number, lab
     if (req.body.locationBias?.circle?.center && (req.body.pageSize ?? 20) > 1) center = req.body.locationBias.circle.center;
     await new Promise((r) => setTimeout(r, 300));
     const words = (req.body.textQuery ?? "").toLowerCase().split(/\W+/).filter((w) => w.length > 2 && !["restaurant", "food", "the", "and", "spot"].includes(w));
-    if ((req.body.pageSize ?? 20) === 1) return { places: [{ id: "mockgeocode", formattedAddress: req.body.textQuery, location: center }] };
     const hits = all().filter((p) => words.some((w) => `${p.displayName.text} ${p.types.join(" ")} ${p.reviews.map((r) => r.text.text).join(" ")}`.toLowerCase().includes(w)));
     return { places: hits.length ? hits : all() };
   });

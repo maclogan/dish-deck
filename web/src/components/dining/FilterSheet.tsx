@@ -30,7 +30,7 @@ export function FilterSheet(props: {
   filters: DiningFilters;
   sort: DiningSort;
   radius: number;
-  units: "mi" | "km";
+  maxRadius: number;
   cuisines: { id: string; label: string }[];
   aiOn: boolean;
   onApply: (f: DiningFilters, sort: DiningSort, radius: number) => void;
@@ -47,8 +47,7 @@ export function FilterSheet(props: {
     }
   }, [props.open]);
   const set = <K extends keyof DiningFilters>(k: K, v: DiningFilters[K]) => setF((x) => ({ ...x, [k]: v }));
-  const radii = props.units === "km" ? [1, 2, 5, 10, 20].map((k) => k / 1.609) : [0.5, 1, 3, 5, 10];
-  const radiusText = (mi: number) => (props.units === "km" ? `${Math.round(mi * 1.609)} km` : `${mi} mi`);
+  const radii = [0.5, 1, 3, 5, 10, props.maxRadius];
 
   return (
     <Sheet open={props.open} title="Filters" onClose={props.onClose}>
@@ -67,7 +66,7 @@ export function FilterSheet(props: {
         <ChipRow>
           {radii.map((r) => (
             <button key={r} type="button" class={`pill ${Math.abs(radius - r) < 0.01 ? "on" : ""}`} onClick={() => setRadius(r)}>
-              {radiusText(r)}
+              {r} mi
             </button>
           ))}
         </ChipRow>

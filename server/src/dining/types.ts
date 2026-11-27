@@ -172,8 +172,10 @@ export interface DiningConfig {
   /** Browser key for Google Maps (Map mode). */
   mapsBrowserKey?: string;
   chatter: boolean;
+  /** Default search radius; Filters can widen it up to maxRadiusMiles. */
   radiusMiles: number;
-  units: "mi" | "km";
-  defaultLocation?: { label: string } & LatLng;
+  maxRadiusMiles: number;
+  /** Where to search when a phone won't share its location. */
+  defaultLocation: { label: string } & LatLng;
   cuisines: { id: string; label: string }[];
 }

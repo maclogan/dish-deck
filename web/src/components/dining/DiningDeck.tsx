@@ -7,7 +7,7 @@ type Move = "hide" | "star";
 const FLING = 110;
 
 /** One place at a time: drag left for "not today", right to shortlist, tap for details. */
-export function DiningDeck(props: { places: PlaceSummary[]; units: "mi" | "km"; actions: PlaceActions }) {
+export function DiningDeck(props: { places: PlaceSummary[]; actions: PlaceActions }) {
   const [skipped, setSkipped] = useState<string[]>([]);
   const queue = props.places.filter((p) => !skipped.includes(p.id));
   const top = queue[0];
@@ -115,7 +115,7 @@ export function DiningDeck(props: { places: PlaceSummary[]; units: "mi" | "km"; 
                 </div>
                 <div class="card-text">
                   <h3>{p.name}</h3>
-                  <MetaLine p={p} units={props.units} />
+                  <MetaLine p={p} />
                   <StatusChips p={p} />
                   {p.why && <p class="place-why">{p.why}</p>}
                   {p.tags.length > 0 && (

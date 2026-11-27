@@ -48,10 +48,6 @@ export interface Config {
   googleMapsBrowserKey?: string;
   /** Override for the Places API address (testing). */
   googlePlacesBaseUrl: string;
-  /** Address to search around when the phone's location isn't available. */
-  diningDefaultLocation?: string;
-  diningRadiusMiles: number;
-  diningUnits: "mi" | "km";
 }
 
 export class ConfigError extends Error {}
@@ -161,10 +157,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     problems.push("PREFETCH_SECONDS_PER_SITE must be 0 (off) or between 1 and 3600");
   }
 
-  const radius = Number(get("DINING_RADIUS_MILES") ?? 3);
-  if (!Number.isFinite(radius) || radius < 0.25 || radius > 30) problems.push("DINING_RADIUS_MILES must be between 0.25 and 30");
-  const units = (get("DINING_UNITS") ?? "mi").toLowerCase();
-  if (units !== "mi" && units !== "km") problems.push("DINING_UNITS must be mi or km");
   for (const name of ["GOOGLE_MAPS_API_KEY", "GOOGLE_MAPS_BROWSER_KEY"]) {
     if (/\s/.test(get(name) ?? "")) problems.push(`${name} contains spaces or line breaks; paste it again as one line`);
   }
@@ -202,8 +194,5 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     googleMapsApiKey: get("GOOGLE_MAPS_API_KEY"),
     googleMapsBrowserKey: get("GOOGLE_MAPS_BROWSER_KEY"),
     googlePlacesBaseUrl: get("GOOGLE_PLACES_BASE_URL")?.replace(/\/+$/, "") ?? "https://places.googleapis.com",
-    diningDefaultLocation: get("DINING_DEFAULT_LOCATION"),
-    diningRadiusMiles: radius,
-    diningUnits: units as Config["diningUnits"],
   };
 }

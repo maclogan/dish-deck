@@ -26,7 +26,7 @@ export function PlacePhoto({ place, lazy = true }: { place: Pick<PlaceSummary, "
 }
 
 /** "★ 4.6 (812) · $$ · Thai · Independent" */
-export function MetaLine({ p, units }: { p: PlaceSummary; units: "mi" | "km" }) {
+export function MetaLine({ p }: { p: PlaceSummary }) {
   return (
     <p class="place-meta">
       {p.rating ? (
@@ -39,7 +39,7 @@ export function MetaLine({ p, units }: { p: PlaceSummary; units: "mi" | "km" }) 
       )}
       {p.price ? <span> · {priceText(p.price)}</span> : null}
       {p.cuisine ? <span> · {p.cuisine}</span> : null}
-      <span> · {distanceText(p.distanceMiles, units)}</span>
+      <span> · {distanceText(p.distanceMiles)}</span>
     </p>
   );
 }
@@ -79,7 +79,7 @@ export function PlaceLinks({ p }: { p: PlaceSummary }) {
 
 const SWIPE = 90;
 
-export function PlaceCard({ p, index, units, actions }: { p: PlaceSummary; index?: number; units: "mi" | "km"; actions: PlaceActions }) {
+export function PlaceCard({ p, index, actions }: { p: PlaceSummary; index?: number; actions: PlaceActions }) {
   const ref = useRef<HTMLDivElement>(null);
   const drag = useRef<{ id: number; x: number; y: number; dx: number; horizontal?: boolean } | null>(null);
   const [menu, setMenu] = useState(false);
@@ -162,7 +162,7 @@ export function PlaceCard({ p, index, units, actions }: { p: PlaceSummary; index
               <IconMore size={18} />
             </button>
           </div>
-          <MetaLine p={p} units={units} />
+          <MetaLine p={p} />
           <StatusChips p={p} />
           {p.why && <p class="place-why">{p.why}</p>}
           {p.tags.length > 0 && (
