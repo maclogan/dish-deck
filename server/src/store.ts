@@ -57,6 +57,10 @@ CREATE TABLE IF NOT EXISTS photos (
   json TEXT,
   at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS dining_never_v2 (
   owner TEXT NOT NULL,
   place_id TEXT NOT NULL,
@@ -354,5 +358,15 @@ export class Store {
 
   diningPut(key: string, value: unknown) {
     this.db.prepare("INSERT OR REPLACE INTO dining_cache (key, json, at) VALUES (?, ?, ?)").run(key, JSON.stringify(value), Date.now());
+  }
+
+  // ------------------------------------------------------------------ settings the app learns by itself
+
+  getSetting(key: string): string | undefined {
+    return (this.db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as { value: string } | undefined)?.value;
+  }
+
+  setSetting(key: string, value: string) {
+    this.db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run(key, value);
   }
 }

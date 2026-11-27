@@ -17,7 +17,7 @@ import { SearxngSearch } from "./sources/searxng.js";
 import { allSites, siteList } from "./sources/sites.js";
 import { RecipeSites, fromMealieScrape } from "./sources/webrecipes.js";
 import { Store } from "./store.js";
-import { AccessVerifier } from "./access.js";
+import { AccessTrust } from "./access.js";
 import { AiDining } from "./dining/ai.js";
 import { Chatter } from "./dining/chatter.js";
 import { PlacesClient } from "./dining/places.js";
@@ -162,7 +162,7 @@ export function diningPhotoUrl(passcode: string | undefined, name: string, width
 
 export function buildApp(
   config: Config,
-  overrides: Partial<{ service: Service; mealie: MealieClient; store: Store; dining: DiningService | null; access: AccessVerifier }> = {},
+  overrides: Partial<{ service: Service; mealie: MealieClient; store: Store; dining: DiningService | null; accessFetch: typeof fetch }> = {},
 ): FastifyInstance {
   const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? "info" } });
   const mealie = overrides.mealie ?? new MealieClient(config.mealieUrl, config.mealieToken);
@@ -238,22 +238,22 @@ export function buildApp(
     }
   }
 
-  // Who's calling. Behind Cloudflare Access, its signed token says who signed in: a household email is the
-  // household, any other email is a guest. Otherwise (or as a fallback, e.g. on the home network) the
-  // household passcode. With neither configured the app is open, as before.
-  const access =
-    overrides.access ??
-    (config.cfAccessTeamDomain && config.cfAccessAud ? new AccessVerifier(config.cfAccessTeamDomain, config.cfAccessAud, fetch, warn) : undefined);
-  const household = new Set(config.householdEmails);
+  // Who's calling, with nothing to configure:
+  //  - the household passcode → the household (their devices already have it saved);
+  //  - otherwise, a genuine Cloudflare Access sign-in → a guest (Eat out only), identified by its email.
+  // Which Cloudflare team and Access application to trust is learned from the household's own requests
+  // (passcode plus Cloudflare's token), so only the household decides whose sign-ins count.
+  // Without APP_PASSCODE the app is open to everyone, as before, and there are no guests.
+  const access = new AccessTrust(store, overrides.accessFetch ?? fetch, warn);
   const whoIs = async (req: { headers: Record<string, string | string[] | undefined> }): Promise<Caller> => {
-    if (access) {
-      const email = await access.email(String(req.headers["cf-access-jwt-assertion"] ?? "") || undefined);
-      if (email) return household.has(email) ? { role: "household", email } : { role: "guest", email };
+    if (!config.appPasscode) return { role: "household" };
+    const token = String(req.headers["cf-access-jwt-assertion"] ?? "") || undefined;
+    if (safeEqual(String(req.headers["x-app-passcode"] ?? ""), config.appPasscode)) {
+      await access.learn(token).catch(() => undefined);
+      return { role: "household" };
     }
-    if (config.appPasscode) {
-      return safeEqual(String(req.headers["x-app-passcode"] ?? ""), config.appPasscode) ? { role: "household" } : { role: "none" };
-    }
-    return access ? { role: "none" } : { role: "household" };
+    const email = await access.email(token).catch(() => undefined);
+    return email ? { role: "guest", email } : { role: "none" };
   };
 
   app.addHook("onRequest", async (req, reply) => {
@@ -266,7 +266,7 @@ export function buildApp(
       return;
     }
     if (req.caller.role === "household") return;
-    if (!config.appPasscode) return reply.code(401).send({ error: "Sign in required" });
+    if (!config.appPasscode) return;
     // <img> tags can't send the passcode header, so image URLs carry a signature instead.
     if (url.startsWith("/api/mealie-image/")) {
       const id = url.slice("/api/mealie-image/".length);

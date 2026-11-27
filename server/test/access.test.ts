@@ -4,9 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { AccessVerifier } from "../src/access.js";
+import { AccessVerifier, peek } from "../src/access.js";
 import { buildApp } from "../src/app.js";
-import { type Config, loadConfig } from "../src/config.js";
+import type { Config } from "../src/config.js";
 import { GUEST_DAILY_SEARCHES } from "../src/dining/routes.js";
 import { PlacesClient, type GPlace } from "../src/dining/places.js";
 import { DiningService } from "../src/dining/service.js";
@@ -20,11 +20,15 @@ const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 20
 const other = generateKeyPairSync("rsa", { modulusLength: 2048 });
 const jwk = { ...publicKey.export({ format: "jwk" }), kid: "k1", alg: "RS256" };
 
+const OTHER_TEAM = "intruder.cloudflareaccess.com";
+const otherJwk = { ...other.publicKey.export({ format: "jwk" }), kid: "k1", alg: "RS256" };
 let certFetches = 0;
 const certsFetch = (async (input: URL | RequestInfo) => {
   certFetches++;
-  expect(String(input)).toBe(`https://${TEAM}/cdn-cgi/access/certs`);
-  return new Response(JSON.stringify({ keys: [jwk] }), { headers: { "Content-Type": "application/json" } });
+  const url = String(input);
+  const keys = url === `https://${TEAM}/cdn-cgi/access/certs` ? [jwk] : url === `https://${OTHER_TEAM}/cdn-cgi/access/certs` ? [otherJwk] : undefined;
+  if (!keys) return new Response("not found", { status: 404 });
+  return new Response(JSON.stringify({ keys }), { headers: { "Content-Type": "application/json" } });
 }) as typeof fetch;
 
 const b64 = (v: unknown) => Buffer.from(JSON.stringify(v)).toString("base64url");
@@ -48,6 +52,11 @@ describe("AccessVerifier", () => {
     expect(await v.email(token({ email: "me@example.com" }, { kid: "unknown" }))).toBeUndefined();
     expect(await v.email("not.a.token")).toBeUndefined();
     expect(await v.email(undefined)).toBeUndefined();
+  });
+  it("reads a token's issuer and audience, but only for Cloudflare Access teams", () => {
+    expect(peek(token({ email: "me@example.com" }))).toEqual({ iss: `https://${TEAM}`, aud: AUD });
+    expect(peek(token({ email: "me@example.com", iss: "https://evil.example.com" }))).toBeUndefined();
+    expect(peek("garbage")).toBeUndefined();
   });
   it("caches the keys instead of fetching them for every request", async () => {
     const before = certFetches;
@@ -82,9 +91,6 @@ const config: Config = {
   webDir: "/nonexistent",
   googlePlacesBaseUrl: "https://places.test",
   appPasscode: "secret",
-  cfAccessTeamDomain: TEAM,
-  cfAccessAud: AUD,
-  householdEmails: [HOUSEHOLD],
 };
 
 const HERE = { lat: 39.74, lng: -104.99 };
@@ -108,11 +114,15 @@ function setup() {
     photoUrl: (name, w) => `/photo/${name}/${w}`,
     warn: () => undefined,
   });
-  const app = buildApp(config, { store, dining, access: new AccessVerifier(TEAM, AUD, certsFetch) });
-  const as = (email: string) => ({ "cf-access-jwt-assertion": token({ email }) });
+  const app = buildApp(config, { store, dining, accessFetch: certsFetch });
+  // The household: passcode (saved on their phones) plus Cloudflare's token. Guests: just the token.
+  const as = (email: string) =>
+    email === HOUSEHOLD ? { "x-app-passcode": "secret", "cf-access-jwt-assertion": token({ email }) } : { "cf-access-jwt-assertion": token({ email }) };
+  // Until the household has used the app once through Cloudflare, it doesn't know which team to trust.
+  const learn = () => app.inject({ method: "GET", url: "/api/config", headers: as(HOUSEHOLD) });
   const search = (headers: Record<string, string>) =>
     app.inject({ method: "POST", url: "/api/dining/search", headers, payload: { location: HERE, radiusMiles: 5, ai: false, filters: { openAtTime: false } } });
-  return { app, store, as, search };
+  return { app, store, as, search, learn };
 }
 
 const HOUSEHOLD_ONLY: [string, string][] = [
@@ -129,7 +139,8 @@ const HOUSEHOLD_ONLY: [string, string][] = [
 
 describe("guests through Cloudflare Access", () => {
   it("blocks guests from everything but Eat out, and lets the household use it all", async () => {
-    const { app, as } = setup();
+    const { app, as , learn } = setup();
+    await learn();
     for (const [method, url] of HOUSEHOLD_ONLY) {
       const res = await app.inject({ method: method as "GET", url, headers: as(GUEST), payload: method === "POST" ? {} : undefined });
       expect([url, res.statusCode]).toEqual([url, 403]);
@@ -139,18 +150,45 @@ describe("guests through Cloudflare Access", () => {
     expect((await app.inject({ method: "GET", url: "/api/dining/never", headers: as(GUEST) })).statusCode).toBe(200);
   });
 
-  it("needs a genuine sign-in or the household passcode", async () => {
-    const { app } = setup();
+  it("needs the passcode or a genuine sign-in from the team the household uses", async () => {
+    const { app, as, learn } = setup();
+    // Before the household has visited through Cloudflare, a guest's token isn't trusted yet.
+    expect((await app.inject({ method: "GET", url: "/api/dining/never", headers: as(GUEST) })).statusCode).toBe(401);
+    await learn();
+    expect((await app.inject({ method: "GET", url: "/api/dining/never", headers: as(GUEST) })).statusCode).toBe(200);
     expect((await app.inject({ method: "GET", url: "/api/dining/never" })).statusCode).toBe(401);
-    expect((await app.inject({ method: "GET", url: "/api/week", headers: { "cf-access-jwt-assertion": token({ email: HOUSEHOLD }, { key: other.privateKey }) } })).statusCode).toBe(401);
-    // The passcode still works as the household's fallback (e.g. on the home network).
-    expect((await app.inject({ method: "GET", url: "/api/dining/never", headers: { "x-app-passcode": "secret" } })).statusCode).toBe(200);
+    // Forged, or from another Cloudflare team signing its own tokens: not a guest.
+    const forged = token({ email: GUEST }, { key: other.privateKey });
+    const intruder = token({ email: GUEST, iss: `https://${OTHER_TEAM}` }, { key: other.privateKey });
+    for (const t of [forged, intruder]) {
+      expect((await app.inject({ method: "GET", url: "/api/dining/never", headers: { "cf-access-jwt-assertion": t } })).statusCode).toBe(401);
+    }
+    // The passcode alone still works (e.g. on the home network), and beats a guest token.
+    expect((await app.inject({ method: "GET", url: "/api/week", headers: { "x-app-passcode": "secret" } })).statusCode).not.toBe(401);
+    const both = await app.inject({ method: "GET", url: "/api/config", headers: { "x-app-passcode": "secret", "cf-access-jwt-assertion": token({ email: GUEST }) } });
+    expect(both.json().role).toBe("household");
+  });
+
+  it("learns the team only from the household, and follows it if the Access app changes", async () => {
+    const { app, store, as } = setup();
+    // A guest's token never teaches the app anything.
+    await app.inject({ method: "GET", url: "/api/config", headers: as(GUEST) });
+    expect(store.getSetting("access.issuer")).toBeUndefined();
+    await app.inject({ method: "GET", url: "/api/config", headers: as(HOUSEHOLD) });
+    expect([store.getSetting("access.issuer"), store.getSetting("access.aud")]).toEqual([`https://${TEAM}`, AUD]);
+    // The household now comes through a re-created Access app (new audience tag).
+    await app.inject({ method: "GET", url: "/api/config", headers: { "x-app-passcode": "secret", "cf-access-jwt-assertion": token({ email: HOUSEHOLD, aud: ["aud-new"] }) } });
+    expect(store.getSetting("access.aud")).toBe("aud-new");
+    // A forged token alongside the passcode doesn't change what's trusted.
+    await app.inject({ method: "GET", url: "/api/config", headers: { "x-app-passcode": "secret", "cf-access-jwt-assertion": token({ email: HOUSEHOLD, iss: `https://${OTHER_TEAM}`, aud: ["x"] }, { key: privateKey }) } });
+    expect(store.getSetting("access.issuer")).toBe(`https://${TEAM}`);
   });
 
   it("tells the app who is signed in, and hides Mealie from guests", async () => {
-    const { app, as } = setup();
+    const { app, as , learn } = setup();
+    await learn();
     const h = (await app.inject({ method: "GET", url: "/api/config", headers: as(HOUSEHOLD) })).json();
-    expect(h).toMatchObject({ role: "household", email: HOUSEHOLD, passcodeRequired: false, mealieUrl: "https://meals.example.com" });
+    expect(h).toMatchObject({ role: "household", passcodeRequired: false, mealieUrl: "https://meals.example.com" });
     const g = (await app.inject({ method: "GET", url: "/api/config", headers: as(GUEST) })).json();
     expect(g).toMatchObject({ role: "guest", email: GUEST, passcodeRequired: false });
     expect(g.mealieUrl).toBeUndefined();
@@ -159,7 +197,8 @@ describe("guests through Cloudflare Access", () => {
   });
 
   it("keeps a separate never-again list for each person", async () => {
-    const { app, as, search } = setup();
+    const { app, as, search , learn } = setup();
+    await learn();
     await app.inject({ method: "POST", url: "/api/dining/never", headers: as(GUEST), payload: { id: "place000001", name: "Place 1" } });
     await app.inject({ method: "POST", url: "/api/dining/never", headers: as(HOUSEHOLD), payload: { id: "place000002", name: "Place 2" } });
     const names = async (email: string) => (await search(as(email))).json().places.map((p: { name: string }) => p.name);
@@ -171,22 +210,12 @@ describe("guests through Cloudflare Access", () => {
   });
 
   it("limits each guest's searches per day, but not the household's", async () => {
-    const { as, search } = setup();
+    const { as, search , learn } = setup();
+    await learn();
     for (let i = 0; i < GUEST_DAILY_SEARCHES; i++) expect((await search(as(GUEST))).statusCode).toBe(200);
     expect((await search(as(GUEST))).statusCode).toBe(429);
     expect((await search(as(GUEST2))).statusCode).toBe(200);
     for (let i = 0; i < GUEST_DAILY_SEARCHES + 5; i++) expect((await search(as(HOUSEHOLD))).statusCode).toBe(200);
-  });
-});
-
-describe("Cloudflare Access settings", () => {
-  const base = { MEALIE_URL: "http://mealie:9000", MEALIE_TOKEN: "t", TZ: "UTC" };
-  it("reads them, and insists on all three together", () => {
-    const c = loadConfig({ ...base, CF_ACCESS_TEAM_DOMAIN: "https://team.cloudflareaccess.com/", CF_ACCESS_AUD: "a", HOUSEHOLD_EMAILS: "Me@x.com, wife@x.com" });
-    expect(c).toMatchObject({ cfAccessTeamDomain: "team.cloudflareaccess.com", cfAccessAud: "a", householdEmails: ["me@x.com", "wife@x.com"] });
-    expect(() => loadConfig({ ...base, CF_ACCESS_TEAM_DOMAIN: "team.cloudflareaccess.com" })).toThrow(/go together/);
-    expect(() => loadConfig({ ...base, CF_ACCESS_TEAM_DOMAIN: "team.cloudflareaccess.com", CF_ACCESS_AUD: "a", HOUSEHOLD_EMAILS: "nope" })).toThrow(/isn't an email/);
-    expect(loadConfig(base).householdEmails).toEqual([]);
   });
 });
 

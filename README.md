@@ -155,10 +155,7 @@ Every setting is documented in [`example.env`](example.env). Variables set in th
 |---|---|---|
 | `MEALIE_URL` | (required) | URL the server uses to reach Mealie |
 | `MEALIE_TOKEN` | (required) | Mealie API token |
-| `APP_PASSCODE` | (none) | Household passcode. If unset, the app is open to anyone who can reach it (unless Cloudflare Access is set up below). |
-| `CF_ACCESS_TEAM_DOMAIN` | (none) | Cloudflare Access team domain, e.g. `yourteam.cloudflareaccess.com`. See [Sharing Eat out with guests](#sharing-eat-out-with-guests) |
-| `CF_ACCESS_AUD` | (none) | The Access application's Audience (AUD) tag |
-| `HOUSEHOLD_EMAILS` | (none) | Signed-in emails that are the household; other emails Cloudflare lets in are guests (Eat out only) |
+| `APP_PASSCODE` | (none) | Household passcode. If unset, the app is open to anyone who can reach it. Also how the app tells the household from [guests](#sharing-eat-out-with-guests). |
 | `MEALIE_PUBLIC_URL` | (none) | Public Mealie URL, for "Open in Mealie" links |
 | `TZ` | system timezone | IANA timezone that decides what "today" is, e.g. `America/Chicago` |
 | `ANTHROPIC_API_KEY` | (none) | Turns on AI ideas |
@@ -196,23 +193,17 @@ Dish Deck can write to your Mealie and spend AI credit, so treat it like Mealie 
 
 ### Sharing Eat out with guests
 
-If Dish Deck is behind **Cloudflare Access**, people outside the household can use the **Eat out** tab without seeing or changing anything else. You add and remove guests in Cloudflare; the app doesn't need changing when they come and go.
+If Dish Deck is behind **Cloudflare Access** and `APP_PASSCODE` is set, people outside the household can use the **Eat out** tab without seeing or changing anything else. There's nothing to set in Dish Deck: you add and remove guests in Cloudflare.
 
 **What guests get:** only Eat out, with their own never-again list and shortlist. They can't see Discover, This week or Mealie, and the server refuses those requests (403). Each guest gets up to **60 searches a day** on your Google and AI keys; the household has no limit.
 
-**Set up (once):**
-1. In Cloudflare Zero Trust → **Access → Applications** → your Dish Deck app:
-   - Copy the **Application Audience (AUD) Tag** from its Overview.
-   - Next to your household policy, add a policy named **guests**: Action *Allow*, Include *Emails*, and list their emails. Guests can sign in with the one-time PIN that Cloudflare emails them.
-2. Note your **team domain** (Zero Trust → Settings, e.g. `yourteam.cloudflareaccess.com`).
-3. Add three lines to `.env`, update the Secret and restart (as in [Kubernetes](#kubernetes-microk8s-k3s-)):
-   ```
-   CF_ACCESS_TEAM_DOMAIN=yourteam.cloudflareaccess.com
-   CF_ACCESS_AUD=<the AUD tag>
-   HOUSEHOLD_EMAILS=you@example.com, partner@example.com
-   ```
+**How it tells who's who:** a device with the household passcode (yours already have it saved) is the household. Anyone else Cloudflare lets in is a guest, identified by the email they signed in with. Dish Deck checks the signature on the sign-in token Cloudflare attaches to every request, and only trusts your own Cloudflare team and Access app, which it learns from your household's requests.
 
-**How it decides:** the app checks the signed sign-in token Cloudflare attaches to every request. An email in `HOUSEHOLD_EMAILS` is the household and skips the passcode screen; any other email Cloudflare lets in is a guest. Requests that don't come through Cloudflare (e.g. on your home network) still work with `APP_PASSCODE`.
+**Set up:**
+1. In Cloudflare Zero Trust → **Access → Applications** → your Dish Deck app, add a policy named **guests** next to your household one: Action *Allow*, Include *Emails*, and list their emails. Guests can sign in with the one-time PIN Cloudflare emails them.
+2. After updating Dish Deck, open it once yourself through your Cloudflare address, so it learns which Cloudflare team to trust. Until then, guests see the passcode screen.
+
+**A new household phone** behind Cloudflare shows up as a guest at first: tap **Household? Enter passcode** under the title.
 
 **Removing a guest:** delete their email from the **guests** policy. Cloudflare keeps a sign-in valid for the application's session duration (24 hours by default), so to cut someone off immediately, also revoke their session from the users list in Zero Trust, or shorten the session duration.
 

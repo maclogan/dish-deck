@@ -70,7 +70,13 @@ export function App() {
     e.preventDefault();
     setPasscode(passInput.trim());
     loadConfig()
-      .then((c) => setPassError(c.role === "none" ? "That passcode didn't work." : null))
+      .then((c) => {
+        if (c.role === "household") return setPassError(null);
+        // Wrong code. (A guest stays signed in as a guest underneath, so keep the form open to say so.)
+        setPasscode("");
+        setNeedPasscode(true);
+        setPassError("That passcode didn't work.");
+      })
       .catch((err) => setPassError(err instanceof Error ? err.message : "Can't reach the server"));
   };
 
@@ -99,19 +105,12 @@ export function App() {
           aria-label="Passcode"
         />
         <button class="btn primary" type="submit">Unlock</button>
+        {config.role === "guest" && (
+          <button type="button" class="btn ghost" onClick={() => { setNeedPasscode(false); setPassError(null); }}>
+            Back
+          </button>
+        )}
       </form>
-    );
-  }
-
-  // Behind Cloudflare Access with no passcode fallback, but Cloudflare's sign-in didn't come through.
-  if (config.role === "none") {
-    return (
-      <div class="center">
-        <IconLock size={32} />
-        <h1>Dish Deck</h1>
-        <p class="muted">You're not signed in. Open this page again to sign in.</p>
-        <button class="btn primary" onClick={() => location.reload()}>Sign in</button>
-      </div>
     );
   }
 
@@ -132,7 +131,12 @@ export function App() {
       <header class={`topbar ${shown === "discover" && bookOpen ? "wide" : ""}`}>
         <div class="topbar-title">
           <h1>Dish Deck</h1>
-          {guest && <span class="signed-in">Guest · {config.email}</span>}
+          {guest && (
+            <span class="signed-in">
+              Guest · {config.email} ·{" "}
+              <button type="button" class="link-btn" onClick={() => setNeedPasscode(true)}>Household? Enter passcode</button>
+            </span>
+          )}
         </div>
         <div class="topbar-actions">
           {config.aiEnabled && (

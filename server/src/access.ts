@@ -3,6 +3,10 @@
 // against Cloudflare's published keys before its email is trusted; a bare email header could be faked
 // by anything that reaches the server without going through Cloudflare.
 // https://developers.cloudflare.com/cloudflare-one/identity/authorization-cookie/validating-json/
+//
+// Nothing needs configuring: AccessTrust learns which Cloudflare team and application to trust from the
+// household's own requests (ones that also carry the household passcode), and from then on accepts tokens
+// only from that team and application.
 
 import { createPublicKey, verify, type KeyObject } from "node:crypto";
 
@@ -19,6 +23,22 @@ interface Jwk {
 
 const b64url = (s: string) => Buffer.from(s.replace(/-/g, "+").replace(/_/g, "/"), "base64");
 
+/** Only Cloudflare Access team addresses are ever trusted as token issuers. */
+export const isAccessIssuer = (iss: unknown): iss is string => typeof iss === "string" && /^https:\/\/[a-z0-9-]+\.cloudflareaccess\.com$/i.test(iss);
+
+/** A token's issuer and audience, read WITHOUT checking anything. Only for deciding what to verify against. */
+export function peek(token: string | undefined): { iss: string; aud: string } | undefined {
+  const body = token?.split(".")[1];
+  if (!body) return undefined;
+  try {
+    const claims = JSON.parse(b64url(body).toString("utf8")) as { iss?: unknown; aud?: unknown };
+    const aud = Array.isArray(claims.aud) ? claims.aud[0] : claims.aud;
+    return isAccessIssuer(claims.iss) && typeof aud === "string" && aud ? { iss: claims.iss, aud } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export class AccessVerifier {
   private keys = new Map<string, KeyObject>();
   private fetchedAt = 0;
@@ -26,7 +46,7 @@ export class AccessVerifier {
   private loading?: Promise<void>;
   readonly issuer: string;
 
-  /** teamDomain: "yourteam.cloudflareaccess.com" (a scheme is accepted and ignored). */
+  /** teamDomain: "yourteam.cloudflareaccess.com" or its https:// address. */
   constructor(
     teamDomain: string,
     private audience: string,
@@ -90,5 +110,60 @@ export class AccessVerifier {
     if (typeof claims.exp !== "number" || claims.exp < now - 30) return undefined;
     if (typeof claims.nbf === "number" && claims.nbf > now + 30) return undefined;
     return typeof claims.email === "string" && claims.email.includes("@") ? claims.email.trim().toLowerCase() : undefined;
+  }
+}
+
+/** Settings storage AccessTrust needs (the app's Store). */
+export interface SettingsStore {
+  getSetting(key: string): string | undefined;
+  setSetting(key: string, value: string): void;
+}
+
+/**
+ * Which Cloudflare team and Access application this app trusts, learned from the household's requests.
+ * learn() is only called for requests that already proved they're the household (the passcode), so only
+ * the household can decide which Cloudflare team's sign-ins count.
+ */
+export class AccessTrust {
+  private verifiers = new Map<string, AccessVerifier>();
+
+  constructor(
+    private store: SettingsStore,
+    private fetchImpl: typeof fetch = fetch,
+    private warn: (msg: string) => void = () => undefined,
+  ) {}
+
+  private verifier(iss: string, aud: string): AccessVerifier {
+    const key = `${iss} ${aud}`;
+    let v = this.verifiers.get(key);
+    if (!v) {
+      v = new AccessVerifier(iss, aud, this.fetchImpl, this.warn);
+      this.verifiers.set(key, v);
+    }
+    return v;
+  }
+
+  /** The team and application currently trusted, if learned. */
+  trusted(): { iss: string; aud: string } | undefined {
+    const iss = this.store.getSetting("access.issuer");
+    const aud = this.store.getSetting("access.aud");
+    return iss && aud ? { iss, aud } : undefined;
+  }
+
+  /** From a household request: remember the team and application its genuine token came from. */
+  async learn(token: string | undefined): Promise<void> {
+    const seen = peek(token);
+    if (!seen) return;
+    const now = this.trusted();
+    if (now && now.iss === seen.iss && now.aud === seen.aud) return;
+    if (!(await this.verifier(seen.iss, seen.aud).email(token))) return;
+    this.store.setSetting("access.issuer", seen.iss);
+    this.store.setSetting("access.aud", seen.aud);
+  }
+
+  /** The signed-in email, if the token is genuine and from the trusted team and application. */
+  async email(token: string | undefined): Promise<string | undefined> {
+    const t = this.trusted();
+    return t && token ? this.verifier(t.iss, t.aud).email(token) : undefined;
   }
 }
