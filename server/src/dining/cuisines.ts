@@ -44,6 +44,29 @@ export const CUISINES: { id: string; label: string }[] = [
 ];
 
 const LABELS = new Map(CUISINES.map((c) => [c.id, c.label]));
+
+/**
+ * Google's main types for places that are mainly somewhere to eat. Google also gives the "restaurant"
+ * type to places that only serve food on the side (Topgolf, cinemas, bowling alleys, hotels), so a
+ * place counts only if its main type is one of these or any "..._restaurant".
+ */
+const EATING_TYPES = new Set([
+  "restaurant", "cafe", "coffee_shop", "bakery", "bar_and_grill", "pub", "gastropub", "brewpub", "diner", "deli",
+  "sandwich_shop", "steak_house", "food_court", "cafeteria", "bistro", "ice_cream_shop", "dessert_shop",
+  "bagel_shop", "donut_shop", "juice_shop", "tea_house", "meal_takeaway", "meal_delivery", "food",
+  "acai_shop", "confectionery", "chocolate_shop", "noodle_shop", "dumpling_shop", "tapas_bar", "wine_bar",
+]);
+
+/** True for places that are mainly somewhere to eat (see EATING_TYPES). */
+export function isEatery(primaryType: string | undefined, types: string[]): boolean {
+  if (primaryType) return primaryType.endsWith("_restaurant") || EATING_TYPES.has(primaryType);
+  // No main type: trust a restaurant type only if nothing marks it as some other kind of venue.
+  return types.some((t) => t === "restaurant" || t.endsWith("_restaurant")) && !types.some((t) => NOT_EATING.has(t));
+}
+const NOT_EATING = new Set([
+  "movie_theater", "bowling_alley", "golf_course", "amusement_center", "amusement_park", "sports_complex", "sports_activity_location",
+  "stadium", "event_venue", "lodging", "hotel", "casino", "gas_station", "grocery_store", "supermarket", "night_club", "gym",
+]);
 export const CUISINE_IDS = CUISINES.map((c) => c.id);
 
 /** The cuisine to show for a place: its primary type if that's a cuisine, else its first cuisine type. */
