@@ -111,7 +111,6 @@ export function DiningDeck(props: { places: PlaceSummary[]; actions: PlaceAction
               <div class="card-face">
                 <div class="card-image">
                   <PlacePhoto place={p} lazy={!isTop} />
-                  {p.price ? <span class="ai-badge">{"$".repeat(p.price)}</span> : null}
                 </div>
                 <div class="card-text">
                   <h3>{p.name}</h3>
