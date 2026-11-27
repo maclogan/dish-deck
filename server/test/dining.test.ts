@@ -284,6 +284,19 @@ describe("DiningService", () => {
     expect(many.google.calls).toHaveLength(1);
   });
 
+  it("leaves out places that only serve food on the side", async () => {
+    const { svc } = service([
+      gplace(1, { displayName: { text: "Topgolf" }, primaryType: "sports_activity_location", types: ["sports_activity_location", "restaurant", "bar"] }),
+      gplace(2, { displayName: { text: "Cinema 8" }, primaryType: "movie_theater", types: ["movie_theater", "restaurant"] }),
+      gplace(3, { displayName: { text: "Corner Bakery" }, primaryType: "bakery", types: ["bakery", "cafe"] }),
+      gplace(4, { displayName: { text: "No Main Type Diner" }, primaryType: undefined, types: ["restaurant", "food"] }),
+      gplace(5, { displayName: { text: "Lanes & Grill" }, primaryType: undefined, types: ["bowling_alley", "restaurant"] }),
+      gplace(6),
+    ]);
+    const r = await svc.search({ location: HERE, radiusMiles: 3, filters: NOFILTER, sort: "best", ai: false });
+    expect(r.places.map((p) => p.name)).toEqual(["Corner Bakery", "No Main Type Diner", "Place 6"]);
+  });
+
   it("drops closed businesses and places far outside the circle", async () => {
     const { svc } = service([gplace(1, { businessStatus: "CLOSED_PERMANENTLY" }), gplace(2, { location: { latitude: 42.5, longitude: -87.63 } }), gplace(3)]);
     const r = await svc.search({ location: HERE, radiusMiles: 3, query: "thai", filters: NOFILTER, sort: "best", ai: false });

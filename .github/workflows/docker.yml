@@ -13,6 +13,12 @@ permissions:
   contents: read
   packages: write
 
+# One build per branch at a time: a newer push cancels an older build still running, so an older
+# build can't finish last and overwrite :latest with stale code.
+concurrency:
+  group: container-image-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   image:
     runs-on: ubuntu-latest

@@ -9,7 +9,7 @@ import { reservationAdvice } from "./advice.js";
 import type { AiDining, AiEnrichment, PlaceBrief, QueryPlan } from "./ai.js";
 import { detectChains } from "./chains.js";
 import type { Chatter, ChatterSource } from "./chatter.js";
-import { CUISINES, cuisineLabel } from "./cuisines.js";
+import { CUISINES, cuisineLabel, isEatery } from "./cuisines.js";
 import { hoursLine, localMoment, openAt, parseClock } from "./hours.js";
 import { type GPlace, PlacesClient, distanceMiles, priceLevel } from "./places.js";
 import type {
@@ -298,6 +298,7 @@ export class DiningService {
       if (seen.has(p.id) || never.has(p.id) || !p.location) return false;
       seen.add(p.id);
       if (p.businessStatus && p.businessStatus !== "OPERATIONAL") return false;
+      if (!isEatery(p.primaryType, p.types ?? [])) return false;
       // The search box's corners reach a little past the circle.
       return distanceMiles(req.location, { lat: p.location.latitude, lng: p.location.longitude }) <= req.radiusMiles * 1.05;
     });

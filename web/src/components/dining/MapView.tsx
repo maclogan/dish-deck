@@ -13,18 +13,54 @@ declare global {
   }
 }
 
-const AUTH_HELP =
-  "Google rejected the map key. In Google Cloud, check that the Maps JavaScript API is enabled for it, that its website restriction includes this address, and that billing is on.";
+// When Google refuses the key it calls gm_authFailure and logs the reason to the console as
+// "Google Maps JavaScript API error: <Name>". Phones make the console hard to reach, so the reason is
+// caught here and shown on the map with the fix.
+const site = () => `${location.origin}/*`;
+const MAP_ERRORS: Record<string, () => string> = {
+  RefererNotAllowedMapError: () => `The map key doesn't allow this site. In Google Cloud → Credentials → the browser key → Website restrictions, add ${site()}`,
+  ApiNotActivatedMapError: () => "The Maps JavaScript API isn't enabled. In Google Cloud → APIs & Services → Library, enable “Maps JavaScript API” for the key's project.",
+  ApiTargetBlockedMapError: () => "The map key's API restrictions don't include the Maps JavaScript API. Add it under the key's API restrictions.",
+  BillingNotEnabledMapError: () => "Billing isn't turned on for the map key's Google Cloud project. Link a billing account to the project.",
+  InvalidKeyMapError: () => "Google doesn't recognize the map key. Copy GOOGLE_MAPS_BROWSER_KEY again from Google Cloud → Credentials.",
+  ExpiredKeyMapError: () => "The map key has expired or was deleted. Create a new browser key and put it in GOOGLE_MAPS_BROWSER_KEY.",
+  MissingKeyMapError: () => "No map key reached Google. Check GOOGLE_MAPS_BROWSER_KEY.",
+  DeletedApiProjectMapError: () => "The map key's Google Cloud project was deleted. Create a key in an active project.",
+  OverQuotaMapError: () => "The map key is over its quota for today.",
+};
+const GENERIC_HELP =
+  "Google rejected the map key. In Google Cloud, check that the Maps JavaScript API is enabled for it, that its website restriction includes this site, and that billing is on.";
+let mapProblem: string | undefined;
 let authFailed = false;
 const authListeners = new Set<() => void>();
+const notify = () => authListeners.forEach((f) => f());
+
+function watchConsole() {
+  const original = console.error.bind(console);
+  console.error = (...args: unknown[]) => {
+    const text = args.map(String).join(" ");
+    const name = /Google Maps JavaScript API (?:error|warning): (\w+)/.exec(text)?.[1];
+    if (name && MAP_ERRORS[name]) {
+      mapProblem = `${MAP_ERRORS[name]!()} (${name})`;
+      notify();
+    }
+    original(...args);
+  };
+}
+
+function authHelp() {
+  return mapProblem ?? GENERIC_HELP;
+}
 
 /** Load the Maps JavaScript API once, with the browser key. */
 function loadMaps(key: string): Promise<void> {
   if (window.google?.maps?.importLibrary) return Promise.resolve();
-  // Google calls this when it refuses the key (wrong key, API not enabled, site not allowed, no billing).
+  if (!window.__dishdeckMaps) watchConsole();
   window.gm_authFailure = () => {
     authFailed = true;
-    authListeners.forEach((f) => f());
+    // The console message with the reason usually comes a moment later.
+    notify();
+    window.setTimeout(notify, 300);
   };
   window.__dishdeckMaps ??= new Promise<void>((resolve, reject) => {
     window.__dishdeckMapsReady = () => resolve();
@@ -52,9 +88,9 @@ export function MapView(props: { apiKey: string; center: LatLng; places: PlaceSu
   const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const onAuth = () => setError(AUTH_HELP);
+    const onAuth = () => (authFailed || mapProblem) && setError(authHelp());
     authListeners.add(onAuth);
-    if (authFailed) onAuth();
+    onAuth();
     return () => void authListeners.delete(onAuth);
   }, []);
 
@@ -102,7 +138,7 @@ export function MapView(props: { apiKey: string; center: LatLng; places: PlaceSu
       ];
       if (props.places.length) map.current.fitBounds(bounds, 40);
       else map.current.setCenter(props.center);
-    })().catch((e) => live && !authFailed && setError(e instanceof Error ? e.message : "Couldn't load the map"));
+    })().catch((e) => live && !authFailed && setError(`Couldn't load the map: ${e instanceof Error ? e.message : String(e)}`));
     return () => {
       live = false;
     };
