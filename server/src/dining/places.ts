@@ -3,7 +3,7 @@
 //
 // Cost note: Google bills each request by the most expensive field it asks for. Searches here ask for
 // reviews and the dine-in/outdoor/reservable flags (the "Enterprise + Atmosphere" SKU), so one search
-// returns everything the list, the filters and the AI need, and opening a place costs nothing extra.
+// page returns everything the list, the filters and the AI need, and opening a place costs nothing extra.
 
 import type { LatLng, PriceLevel } from "./types.js";
 
@@ -101,6 +101,16 @@ export class PlacesError extends Error {
 const METERS_PER_MILE = 1609.344;
 export const milesToMeters = (mi: number) => Math.min(50_000, Math.max(100, mi * METERS_PER_MILE));
 
+/** The box around a circle, as Google's {low, high} rectangle. */
+export function boundingBox(center: LatLng, radiusMiles: number) {
+  const dLat = radiusMiles / 69;
+  const dLng = radiusMiles / (69 * Math.max(0.1, Math.cos((center.lat * Math.PI) / 180)));
+  return {
+    low: { latitude: Math.max(-90, center.lat - dLat), longitude: Math.max(-180, center.lng - dLng) },
+    high: { latitude: Math.min(90, center.lat + dLat), longitude: Math.min(180, center.lng + dLng) },
+  };
+}
+
 /** Great-circle distance in miles. */
 export function distanceMiles(a: LatLng, b: LatLng): number {
   const rad = (d: number) => (d * Math.PI) / 180;
@@ -152,49 +162,37 @@ export class PlacesClient {
     }
   }
 
-  /** Up to 20 places of these types within the circle, most popular (or nearest) first. */
-  async nearby(opts: { center: LatLng; radiusMiles: number; types: string[]; rank: "POPULARITY" | "DISTANCE" }): Promise<GPlace[]> {
-    const data = await this.withFields((mask) =>
-      this.request<{ places?: GPlace[] }>("POST", "/v1/places:searchNearby", mask("places."), {
-        includedTypes: opts.types.length ? opts.types.slice(0, 50) : ["restaurant"],
-        maxResultCount: 20,
-        rankPreference: opts.rank,
-        locationRestriction: { circle: { center: { latitude: opts.center.lat, longitude: opts.center.lng }, radius: milesToMeters(opts.radiusMiles) } },
-      }),
-    );
-    return data.places ?? [];
-  }
-
-  /** A text search near the circle (up to `pages` x 20 results). */
-  async text(opts: {
+  /**
+   * One page (up to 20) of a text search, limited to the box around the search circle. Google applies
+   * the rating, price, type and open-now filters itself, so every result already fits them. Pass the
+   * returned `next` token (with the same options) for the next page; Google gives up to 3 pages.
+   */
+  async textPage(opts: {
     query: string;
     center: LatLng;
     radiusMiles: number;
+    /** Only places of this Google type (e.g. "restaurant", "thai_restaurant"). */
+    type?: string;
     minRating?: number;
     prices?: PriceLevel[];
     openNow?: boolean;
-    pages?: number;
-  }): Promise<GPlace[]> {
-    const out: GPlace[] = [];
-    let pageToken: string | undefined;
-    const pages = opts.pages ?? 1;
-    for (let i = 0; i < pages; i++) {
-      const data = await this.withFields((mask) =>
-        this.request<{ places?: GPlace[]; nextPageToken?: string }>("POST", "/v1/places:searchText", `${mask("places.")},nextPageToken`, {
-          textQuery: opts.query,
-          pageSize: 20,
-          locationBias: { circle: { center: { latitude: opts.center.lat, longitude: opts.center.lng }, radius: milesToMeters(opts.radiusMiles) } },
-          ...(opts.minRating ? { minRating: opts.minRating } : {}),
-          ...(opts.prices?.length ? { priceLevels: opts.prices.map((p) => PRICE_NAMES[p]) } : {}),
-          ...(opts.openNow ? { openNow: true } : {}),
-          ...(pageToken ? { pageToken } : {}),
-        }),
-      );
-      out.push(...(data.places ?? []));
-      pageToken = data.nextPageToken;
-      if (!pageToken) break;
-    }
-    return out;
+    rank?: "RELEVANCE" | "DISTANCE";
+    pageToken?: string;
+  }): Promise<{ places: GPlace[]; next?: string }> {
+    const data = await this.withFields((mask) =>
+      this.request<{ places?: GPlace[]; nextPageToken?: string }>("POST", "/v1/places:searchText", `${mask("places.")},nextPageToken`, {
+        textQuery: opts.query,
+        pageSize: 20,
+        locationRestriction: { rectangle: boundingBox(opts.center, opts.radiusMiles) },
+        ...(opts.type ? { includedType: opts.type, strictTypeFiltering: true } : {}),
+        ...(opts.minRating ? { minRating: opts.minRating } : {}),
+        ...(opts.prices?.length ? { priceLevels: opts.prices.map((p) => PRICE_NAMES[p]) } : {}),
+        ...(opts.openNow ? { openNow: true } : {}),
+        ...(opts.rank ? { rankPreference: opts.rank } : {}),
+        ...(opts.pageToken ? { pageToken: opts.pageToken } : {}),
+      }),
+    );
+    return { places: data.places ?? [], next: data.nextPageToken || undefined };
   }
 
   async details(id: string): Promise<GPlace> {

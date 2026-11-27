@@ -254,7 +254,7 @@ The **Eat out** tab helps decide where to eat today and find new places. It appe
 3. Optional: create a second key for the Map view, restricted to **HTTP referrers** (your Dish Deck address) and the **Maps JavaScript API**, and put it in `GOOGLE_MAPS_BROWSER_KEY`. This one is sent to browsers, which is why it must be restricted.
 4. Recommended: set a **budget alert** and per-day **quotas** on the APIs, so a bug can't run up a bill.
 
-Each search is one Places request that includes reviews and dine-in/outdoor/reservation details (Google's "Enterprise + Atmosphere" price), so opening a place afterwards costs nothing extra. Photos are fetched through the server and cached by the browser. Dish Deck stores only Google place IDs on disk (the never-again list); Google's content is kept in memory for up to an hour.
+Each search asks Google for 20 places at a time, with your rating, price, cuisine and open-now filters applied by Google, and fetches another page (up to 3 requests, or one per picked cuisine) only while fewer than 20 places are left after the rest of the filters. Each request includes reviews and dine-in/outdoor/reservation details (Google's "Enterprise + Atmosphere" price), so opening a place afterwards costs nothing extra. Photos are fetched through the server and cached by the browser. Dish Deck stores only Google place IDs on disk (the never-again list); Google's content is kept in memory for up to an hour.
 
 ## Costs and limits
 
@@ -262,7 +262,7 @@ Each search is one Places request that includes reviews and dine-in/outdoor/rese
 - **AI** is used for dish names (a short request, cached and reused across many decks), nutrition goals (Claude writes those recipes, since sites rarely list nutrition), and recipes no site has. Haiku is the cheapest model, and you pay per use on your own key.
 - **Recipe sites, photo lookups (Wikipedia, Pexels) and SearXNG** are free.
 - **Planner and saved-recipe features** run entirely against Mealie and cost nothing.
-- **Eat out:** Google gives a free allowance each month per kind of request (about 1,000 searches, 1,000 photo loads, 10,000 address lookups and map loads at the time of writing; check [Google's pricing](https://developers.google.com/maps/billing-and-pricing/pricing)). A household eating out a few times a week usually stays inside it; past it, a search costs about 4 cents and a photo under 1 cent. AI for this tab (search planning, reranking, tags and summaries) costs well under a dollar a month on Haiku.
+- **Eat out:** Google gives a free allowance each month per kind of request (about 1,000 searches, 1,000 photo loads, 10,000 address lookups and map loads at the time of writing; check [Google's pricing](https://developers.google.com/maps/billing-and-pricing/pricing)). A household eating out a few times a week usually stays inside it; past it, each search request costs about 4 cents (most searches need one, a heavily filtered one up to three) and a photo under 1 cent. AI for this tab (search planning, reranking, tags and summaries) costs well under a dollar a month on Haiku.
 
 ## Development
 

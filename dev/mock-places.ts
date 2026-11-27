@@ -86,18 +86,27 @@ function place(i: number) {
 
 export function registerPlacesMock(app: FastifyInstance, svg: (seed: number, label: string) => string) {
   const all = () => SEEDS.map((_, i) => place(i));
-  app.post<{ Body: { locationRestriction?: { circle?: { center?: typeof center } }; includedTypes?: string[] } }>("/v1/places::searchNearby", async (req) => {
-    if (req.body.locationRestriction?.circle?.center) center = req.body.locationRestriction.circle.center;
-    const types = req.body.includedTypes ?? ["restaurant"];
+  app.post<{
+    Body: {
+      textQuery?: string;
+      locationRestriction?: { rectangle?: { low: typeof center; high: typeof center } };
+      includedType?: string;
+      minRating?: number;
+      priceLevels?: string[];
+      pageToken?: string;
+    };
+  }>("/v1/places::searchText", async (req) => {
+    const box = req.body.locationRestriction?.rectangle;
+    if (box) center = { latitude: (box.low.latitude + box.high.latitude) / 2, longitude: (box.low.longitude + box.high.longitude) / 2 };
     await new Promise((r) => setTimeout(r, 300));
-    return { places: all().filter((p) => p.types.some((t) => types.includes(t))).slice(0, 20) };
-  });
-  app.post<{ Body: { textQuery?: string; locationBias?: { circle?: { center?: typeof center } }; pageSize?: number } }>("/v1/places::searchText", async (req) => {
-    if (req.body.locationBias?.circle?.center && (req.body.pageSize ?? 20) > 1) center = req.body.locationBias.circle.center;
-    await new Promise((r) => setTimeout(r, 300));
-    const words = (req.body.textQuery ?? "").toLowerCase().split(/\W+/).filter((w) => w.length > 2 && !["restaurant", "food", "the", "and", "spot"].includes(w));
-    const hits = all().filter((p) => words.some((w) => `${p.displayName.text} ${p.types.join(" ")} ${p.reviews.map((r) => r.text.text).join(" ")}`.toLowerCase().includes(w)));
-    return { places: hits.length ? hits : all() };
+    const words = (req.body.textQuery ?? "").toLowerCase().split(/\W+/).filter((w) => w.length > 2 && !["restaurant", "restaurants", "food", "the", "and", "spot"].includes(w));
+    let hits = all().filter((p) => !words.length || words.some((w) => `${p.displayName.text} ${p.types.join(" ")} ${p.reviews.map((r) => r.text.text).join(" ")}`.toLowerCase().includes(w)));
+    if (!hits.length) hits = all();
+    const { includedType, minRating, priceLevels } = req.body;
+    hits = hits.filter((p) => (!includedType || p.types.includes(includedType)) && (!minRating || p.rating >= minRating) && (!priceLevels?.length || (p.priceLevel && priceLevels.includes(p.priceLevel))));
+    // Two pages of 7, like Google's paging (20 a page there).
+    const page = req.body.pageToken === "page2" ? 1 : 0;
+    return { places: hits.slice(page * 7, page * 7 + 7), ...(page === 0 && hits.length > 7 ? { nextPageToken: "page2" } : {}) };
   });
   app.post<{ Body: { input?: string } }>("/v1/places::autocomplete", async (req) => ({
     suggestions: ["Downtown", "Riverside", "Old Town"].map((n, i) => ({

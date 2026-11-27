@@ -467,6 +467,7 @@ main.wide .segmented { max-width: 420px; }
 /* map mode */
 .map-view { display: flex; flex-direction: column; gap: 10px; }
 .map-canvas { height: 44dvh; min-height: 240px; border-radius: 18px; overflow: hidden; background: var(--surface-2); border: 1px solid var(--line); }
+.map-error { display: grid; place-items: center; padding: 20px; text-align: center; color: var(--ink-2); font-size: 14px; }
 .map-list { display: flex; flex-direction: column; gap: 10px; }
 .map-list .focused .place-card { border-color: var(--tomato); box-shadow: 0 0 0 2px var(--tomato); }
 
