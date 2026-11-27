@@ -1,6 +1,7 @@
 // Small persistent store (one SQLite file in DATA_DIR) for things worth keeping between restarts:
 // recipe-site indexes, parsed recipes, AI dish-name lists, dish -> recipe page matches, the
-// household's seen/skipped history, and photo lookups. Uses Node's built-in SQLite (no extra service).
+// household's seen/skipped history, photo lookups, and for "Eat out": the never-again list and
+// AI/chatter caches (Google's own content isn't stored, only place IDs). Uses Node's built-in SQLite (no extra service).
 
 import fs from "node:fs";
 import path from "node:path";
@@ -54,6 +55,17 @@ CREATE TABLE IF NOT EXISTS history (
 CREATE TABLE IF NOT EXISTS photos (
   key TEXT PRIMARY KEY,
   json TEXT,
+  at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS dining_never (
+  place_id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  address TEXT,
+  at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS dining_cache (
+  key TEXT PRIMARY KEY,
+  json TEXT NOT NULL,
   at INTEGER NOT NULL
 );
 `;
@@ -291,5 +303,39 @@ export class Store {
     const rows = this.db.prepare("SELECT key, action, at FROM history").all() as unknown as { key: string; action: HistoryAction; at: number }[];
     const now = Date.now();
     return new Set(rows.filter((r) => now - r.at < (HISTORY_TTL[r.action] ?? 0)).map((r) => r.key));
+  }
+
+  // ------------------------------------------------------------------ eat out
+
+  /** Places the household never wants suggested again, newest first. */
+  neverList(): { id: string; name: string; address?: string; at: number }[] {
+    return (this.db.prepare("SELECT place_id, name, address, at FROM dining_never ORDER BY at DESC").all() as unknown as {
+      place_id: string;
+      name: string;
+      address: string | null;
+      at: number;
+    }[]).map((r) => ({ id: r.place_id, name: r.name, address: r.address ?? undefined, at: r.at }));
+  }
+
+  neverIds(): Set<string> {
+    return new Set((this.db.prepare("SELECT place_id FROM dining_never").all() as unknown as { place_id: string }[]).map((r) => r.place_id));
+  }
+
+  addNever(id: string, name: string, address?: string) {
+    this.db.prepare("INSERT OR REPLACE INTO dining_never (place_id, name, address, at) VALUES (?, ?, ?, ?)").run(id, name, address ?? null, Date.now());
+  }
+
+  removeNever(id: string) {
+    this.db.prepare("DELETE FROM dining_never WHERE place_id = ?").run(id);
+  }
+
+  diningGet<T>(key: string, maxAge: number): T | undefined {
+    const row = this.db.prepare("SELECT json, at FROM dining_cache WHERE key = ?").get(key) as { json: string; at: number } | undefined;
+    if (!row || Date.now() - row.at > maxAge) return undefined;
+    return JSON.parse(row.json) as T;
+  }
+
+  diningPut(key: string, value: unknown) {
+    this.db.prepare("INSERT OR REPLACE INTO dining_cache (key, json, at) VALUES (?, ?, ?)").run(key, JSON.stringify(value), Date.now());
   }
 }

@@ -1,8 +1,9 @@
 import { useEffect, useState } from "preact/hooks";
 import { ApiError, api, hasPasscode, setPasscode, storageGet, storageSet, type AppConfigResponse, type PlanDay } from "./api";
 import { Discover } from "./components/Discover";
+import { EatOut } from "./components/dining/EatOut";
 import { Week } from "./components/Week";
-import { IconCalendar, IconExternal, IconLock, IconSparkle } from "./icons";
+import { IconCalendar, IconExternal, IconFork, IconLock, IconSparkle } from "./icons";
 import { todayIso } from "./text";
 
 interface Toast {
@@ -17,7 +18,7 @@ export function App() {
   const [configError, setConfigError] = useState<string | null>(null);
   const [needPasscode, setNeedPasscode] = useState(false);
   const [passInput, setPassInput] = useState("");
-  const [tab, setTab] = useState<"discover" | "week">("discover");
+  const [tab, setTab] = useState<"discover" | "week" | "eat">(() => (storageGet("dishdeck.tab") === "eat" ? "eat" : "discover"));
   /** Discover is showing the "Our recipes" grid, which gets a wider page. */
   const [bookOpen, setBookOpen] = useState(false);
   const [days, setDays] = useState<PlanDay[] | null>(null);
@@ -28,6 +29,11 @@ export function App() {
     const next = !aiOn;
     setAiOn(next);
     storageSet("dishdeck.ai", next ? "on" : "off");
+  };
+
+  const pickTab = (t: "discover" | "week" | "eat") => {
+    setTab(t);
+    storageSet("dishdeck.tab", t);
   };
 
   const notify = (message: string, link?: string, error?: boolean) => {
@@ -102,7 +108,15 @@ export function App() {
               type="button"
               class={`ai-on ${aiOn ? "" : "off"}`}
               aria-pressed={aiOn}
-              title={aiOn ? "AI is on: Claude picks dishes and understands moods. Tap to turn off." : "AI is off: free recipes from your trusted sites. Tap to turn on."}
+              title={
+                tab === "eat"
+                  ? aiOn
+                    ? "AI is on: Claude reads searches and reviews for tags, size and reservation advice. Tap to turn off."
+                    : "AI is off: plain Google search and Google's own details. Tap to turn on."
+                  : aiOn
+                    ? "AI is on: Claude picks dishes and understands moods. Tap to turn off."
+                    : "AI is off: free recipes from your trusted sites. Tap to turn on."
+              }
               onClick={toggleAi}
             >
               <IconSparkle size={14} /> AI
@@ -127,20 +141,28 @@ export function App() {
             notify={notify}
             onWide={setBookOpen}
           />
+        ) : tab === "eat" && config.dining?.enabled ? (
+          <EatOut config={config} aiOn={config.aiEnabled && aiOn} notify={notify} />
         ) : (
           <Week days={days} today={today} refreshWeek={refreshWeek} notify={notify} />
         )}
       </main>
 
       <nav class="tabbar">
-        <button class={tab === "discover" ? "on" : ""} onClick={() => setTab("discover")}>
+        <button class={tab === "discover" ? "on" : ""} onClick={() => pickTab("discover")}>
           <IconSparkle size={22} />
           <span>Discover</span>
         </button>
-        <button class={tab === "week" ? "on" : ""} onClick={() => { setTab("week"); refreshWeek(); }}>
+        <button class={tab === "week" ? "on" : ""} onClick={() => { pickTab("week"); refreshWeek(); }}>
           <IconCalendar size={22} />
           <span>This week</span>
         </button>
+        {config.dining?.enabled && (
+          <button class={tab === "eat" ? "on" : ""} onClick={() => pickTab("eat")}>
+            <IconFork size={22} />
+            <span>Eat out</span>
+          </button>
+        )}
       </nav>
 
       {toast && (
