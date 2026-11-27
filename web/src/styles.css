@@ -496,6 +496,11 @@ main.wide .segmented { max-width: 420px; }
 .map-view { display: flex; flex-direction: column; gap: 10px; }
 .map-canvas { height: 44dvh; min-height: 240px; border-radius: 18px; overflow: hidden; background: var(--surface-2); border: 1px solid var(--line); }
 .map-error { display: grid; place-items: center; padding: 20px; text-align: center; color: var(--ink-2); font-size: 14px; }
+.map-pin {
+  min-width: 26px; height: 26px; padding: 0 6px; border-radius: 13px; display: grid; place-items: center;
+  background: var(--tomato); color: #fff; font: 700 12px/1 var(--sans); border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.35);
+}
+.map-you { width: 16px; height: 16px; border-radius: 50%; background: #3b82f6; border: 3px solid #fff; box-shadow: 0 0 0 2px rgba(59,130,246,.35); }
 .map-list { display: flex; flex-direction: column; gap: 10px; }
 .map-list .focused .place-card { border-color: var(--tomato); box-shadow: 0 0 0 2px var(--tomato); }
 
