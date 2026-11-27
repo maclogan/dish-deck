@@ -1,8 +1,47 @@
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import { api, type ChatterResponse, type Moment, type PlaceDetails, type PlaceSummary } from "../../api";
 import { IconBan, IconDirections, IconExternal, IconGlobe, IconPhone, IconSparkle, IconStar } from "../../icons";
 import { Sheet } from "../Sheet";
 import { MetaLine, PlacePhoto, StatusChips } from "./PlaceCard";
+
+/** Swipe sideways through a place's photos; the dots below show which one is in view and jump to one. */
+function PhotoStrip(props: { photos: string[]; index: number; onIndex: (i: number) => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const onScroll = () => {
+    const el = ref.current;
+    if (!el || !el.clientWidth) return;
+    const i = Math.round(el.scrollLeft / el.clientWidth);
+    if (i !== props.index) props.onIndex(i);
+  };
+  const go = (i: number) => ref.current?.scrollTo({ left: i * ref.current.clientWidth, behavior: "smooth" });
+  if (!props.photos.length) {
+    return (
+      <div class="detail-image">
+        <PlacePhoto place={{}} />
+      </div>
+    );
+  }
+  return (
+    <div class="photo-strip-wrap">
+      <div ref={ref} class="photo-strip" onScroll={onScroll} aria-label="Photos" tabIndex={0}>
+        {props.photos.map((src, i) => (
+          <div key={src} class="photo-slide">
+            <PlacePhoto place={{ photo: src }} lazy={i > 1} />
+          </div>
+        ))}
+      </div>
+      {props.photos.length > 1 && (
+        <div class="photo-dots">
+          {props.photos.map((_, i) => (
+            <button key={i} type="button" class={i === props.index ? "on" : ""} aria-label={`Photo ${i + 1} of ${props.photos.length}`} onClick={() => go(i)}>
+              <span />
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function PlaceSheet(props: {
   place: PlaceSummary | null;
@@ -50,16 +89,7 @@ export function PlaceSheet(props: {
     <Sheet open={!!place} title={place?.name} onClose={props.onClose}>
       {p && (
         <div class="detail place-detail">
-          <div class="detail-image">
-            <PlacePhoto place={{ photo: details?.photos[photo] ?? p.photo }} lazy={false} />
-            {details && details.photos.length > 1 && (
-              <div class="photo-dots">
-                {details.photos.map((_, i) => (
-                  <button key={i} type="button" class={i === photo ? "on" : ""} aria-label={`Photo ${i + 1}`} onClick={() => setPhoto(i)} />
-                ))}
-              </div>
-            )}
-          </div>
+          <PhotoStrip photos={details?.photos.length ? details.photos : p.photo ? [p.photo] : []} index={photo} onIndex={setPhoto} />
           <MetaLine p={p} />
           {p.address && <p class="muted small">{p.address}</p>}
           {p.hoursToday && <p class="small">Today: {p.hoursToday}</p>}

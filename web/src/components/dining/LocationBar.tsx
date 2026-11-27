@@ -4,14 +4,17 @@ import { IconClock, IconLocate, IconPin, IconSearch } from "../../icons";
 import { Sheet } from "../Sheet";
 import { addRecent, clockText, loadRecents, loadSpots, saveSpots, type SavedLocation, type Spots } from "./state";
 
-/** Ask the browser for the phone's position. */
-export function currentPosition(): Promise<LatLng> {
+/**
+ * Ask the browser for the phone's position: a fresh GPS fix rather than a rough network guess, which can
+ * be miles off. `accuracy` is Google's/the phone's radius of uncertainty, in meters.
+ */
+export function currentPosition(): Promise<LatLng & { accuracy: number }> {
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) return reject(new Error("This browser can't share its location"));
     navigator.geolocation.getCurrentPosition(
-      (p) => resolve({ lat: p.coords.latitude, lng: p.coords.longitude }),
+      (p) => resolve({ lat: p.coords.latitude, lng: p.coords.longitude, accuracy: p.coords.accuracy }),
       (e) => reject(new Error(e.code === e.PERMISSION_DENIED ? "Location access is off for this site" : "Couldn't find your location")),
-      { enableHighAccuracy: false, timeout: 12_000, maximumAge: 5 * 60_000 },
+      { enableHighAccuracy: true, timeout: 20_000, maximumAge: 30_000 },
     );
   });
 }

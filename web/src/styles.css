@@ -398,9 +398,6 @@ main.wide .segmented { max-width: 420px; }
 .when-custom input { font: inherit; padding: 9px 10px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); }
 
 .eat-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
-.view-toggle { display: inline-flex; background: var(--surface-2); border-radius: 12px; padding: 3px; }
-.view-toggle button { display: inline-flex; align-items: center; gap: 5px; border: 0; background: none; padding: 6px 10px; border-radius: 9px; font-size: 13px; font-weight: 600; color: var(--ink-2); }
-.view-toggle button.on { background: var(--surface); color: var(--ink); box-shadow: 0 1px 3px rgba(0,0,0,.1); }
 .eat-count { font-size: 13px; color: var(--ink-2); font-weight: 600; }
 .filter-clear.inline { display: inline-flex; align-items: center; gap: 4px; margin: 0; padding: 0; }
 .filters.flat { border: 0; padding: 0; margin: 0; background: none; }
@@ -459,7 +456,7 @@ main.wide .segmented { max-width: 420px; }
 }
 .price-badge .price-rest { opacity: .3; }
 .price-badge.unknown { background: var(--surface-2); color: var(--ink-2); font-weight: 700; }
-.dining-deck .price-badge, .place-detail .price-badge { font-size: 15px; padding: 2px 9px; }
+.place-detail .price-badge { font-size: 15px; padding: 2px 9px; }
 .place-body .chips { gap: 4px; }
 .place-body .chip { font-size: 11px; padding: 3px 7px; }
 .chip-bad { background: color-mix(in srgb, var(--tomato) 14%, transparent); color: var(--tomato); }
@@ -483,14 +480,8 @@ main.wide .segmented { max-width: 420px; }
   background: var(--ink); color: var(--bg); font-weight: 700; box-shadow: var(--shadow); white-space: nowrap;
 }
 .shortlist-bar svg { color: var(--amber); }
-.shortlist-bar.inline { position: static; transform: none; padding: 7px 12px; font-size: 13px; box-shadow: none; }
 .toast-btn { border: 0; background: none; color: inherit; font-weight: 800; text-decoration: underline; padding: 0 4px; }
 
-/* deck mode: the location and search rows take a little more room than Discover's */
-.dining-deck .deck { height: min(calc(100dvh - 500px - env(safe-area-inset-top) - env(safe-area-inset-bottom)), 600px); min-height: 330px; }
-.dining-deck .card-image { flex-basis: 50%; }
-.dining-deck .card-text { gap: 6px; }
-.dining-deck .card-text .chips { gap: 4px; }
 
 /* map mode */
 .map-view { display: flex; flex-direction: column; gap: 10px; }
@@ -506,9 +497,19 @@ main.wide .segmented { max-width: 420px; }
 
 /* place sheet */
 .place-detail .detail-image { height: 210px; }
-.photo-dots { position: absolute; left: 0; right: 0; bottom: 8px; display: flex; justify-content: center; gap: 6px; }
-.photo-dots button { width: 8px; height: 8px; padding: 0; border-radius: 50%; border: 0; background: rgba(255,255,255,.55); }
-.photo-dots button.on { background: #fff; }
+.photo-strip-wrap { position: relative; }
+.photo-strip {
+  display: flex; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; border-radius: 16px;
+  height: 230px; background: var(--surface-2); overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch;
+}
+.photo-strip::-webkit-scrollbar { display: none; }
+.photo-slide { flex: 0 0 100%; height: 100%; scroll-snap-align: center; scroll-snap-stop: always; }
+.photo-slide img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.photo-dots { position: absolute; left: 0; right: 0; bottom: 6px; display: flex; justify-content: center; gap: 2px; pointer-events: none; }
+/* Small dots with a finger-sized tap area around each. */
+.photo-dots button { width: 22px; height: 22px; padding: 0; border: 0; background: none; display: grid; place-items: center; pointer-events: auto; }
+.photo-dots span { width: 8px; height: 8px; border-radius: 50%; background: rgba(255,255,255,.55); box-shadow: 0 0 2px rgba(0,0,0,.4); }
+.photo-dots button.on span { background: #fff; }
 .small { font-size: 13px; }
 .place-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .place-actions .btn { text-decoration: none; color: var(--ink); padding: 10px 8px; font-size: 14px; }

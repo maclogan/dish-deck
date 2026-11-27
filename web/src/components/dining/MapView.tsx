@@ -164,6 +164,7 @@ export function MapView(props: { apiKey: string; center: LatLng; places: PlaceSu
             <PlaceCard p={p} index={i} actions={props.actions} />
           </div>
         ))}
+        <p class="hint">Tap a pin to jump to its place. Swipe a place left to hide it for today.</p>
       </div>
     </div>
   );

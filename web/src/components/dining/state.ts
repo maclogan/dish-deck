@@ -5,7 +5,6 @@ import type { DiningFilters, DiningSort, LatLng, PlaceSummary } from "../../api"
 import { storageGet, storageSet } from "../../api";
 import { todayIso } from "../../text";
 
-export type Display = "list" | "deck" | "map";
 export interface SavedLocation extends LatLng {
   label: string;
 }
@@ -31,12 +30,6 @@ export function loadToday(): Today {
   return t && t.date === todayIso() ? t : { date: todayIso(), shortlist: [], hidden: [] };
 }
 export const saveToday = (t: Today) => write(DAY_KEY, t);
-
-export const loadDisplay = (): Display => {
-  const v = storageGet("dishdeck.dining.view");
-  return v === "deck" || v === "map" ? v : "list";
-};
-export const saveDisplay = (d: Display) => storageSet("dishdeck.dining.view", d);
 
 export const loadLocation = () => read<(SavedLocation & { gps?: boolean }) | null>("dishdeck.dining.location", null);
 export const saveLocation = (l: SavedLocation & { gps?: boolean }) => write("dishdeck.dining.location", l);

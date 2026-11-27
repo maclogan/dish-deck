@@ -12,8 +12,9 @@ export interface PlaceActions {
 }
 
 export function PlacePhoto({ place, lazy = true }: { place: Pick<PlaceSummary, "photo">; lazy?: boolean }) {
-  const [failed, setFailed] = useState(false);
-  if (!place.photo || failed) {
+  // Remember which address failed, so a different photo still gets its chance to load.
+  const [failed, setFailed] = useState<string | undefined>();
+  if (!place.photo || failed === place.photo) {
     return (
       <div class="placeholder" aria-hidden="true">
         <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
@@ -22,7 +23,7 @@ export function PlacePhoto({ place, lazy = true }: { place: Pick<PlaceSummary, "
       </div>
     );
   }
-  return <img src={place.photo} alt="" loading={lazy ? "lazy" : undefined} draggable={false} onError={() => setFailed(true)} />;
+  return <img src={place.photo} alt="" loading={lazy ? "lazy" : undefined} draggable={false} onError={() => setFailed(place.photo)} />;
 }
 
 const PRICE_WORDS = ["", "Inexpensive", "Moderate", "Expensive", "Very expensive"];
