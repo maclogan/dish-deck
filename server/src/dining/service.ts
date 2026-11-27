@@ -1,6 +1,6 @@
 // "Eat out": search nearby restaurants, apply the filters, optionally let AI rerank and describe them, and
-// keep the household's never-again list. Nothing about likes or past choices affects a search; the
-// never-again list only removes places.
+// keep each person's never-again list (the household's, and each guest's). Nothing about likes or past
+// choices affects a search; the never-again list only removes places.
 //
 // Google's content (reviews, ratings, hours) is held in memory for an hour so opening a place right after a
 // search doesn't cost another request; only place IDs and our own AI output are stored on disk.
@@ -27,6 +27,7 @@ import type {
   PlaceSummary,
 } from "./types.js";
 import type { Store } from "../store.js";
+import { localDate } from "../util.js";
 
 const HOUR = 3600_000;
 const DAY = 24 * HOUR;
@@ -306,7 +307,16 @@ export class DiningService {
     return places.map((p) => ({ p, s: this.summarize(p, moment, chains.has(p.id)) })).filter(({ p, s }) => this.passes(s, p, filters));
   }
 
-  async search(req: DiningSearchRequest): Promise<DiningSearchResponse> {
+  /** Counts a guest's search against the daily limit; false once it's used up. */
+  takeSearch(owner: string, limit: number): boolean {
+    const key = `quota:${owner}:${localDate(this.d.timezone)}`;
+    const used = this.d.store.diningGet<number>(key, 2 * DAY) ?? 0;
+    if (used >= limit) return false;
+    this.d.store.diningPut(key, used + 1);
+    return true;
+  }
+
+  async search(req: DiningSearchRequest, owner = "household"): Promise<DiningSearchResponse> {
     const useAi = req.ai && !!this.d.ai;
     const query = req.query?.trim();
     let plan: QueryPlan | undefined;
@@ -333,7 +343,7 @@ export class DiningService {
         ? filters.cuisines.slice(0, 4).map((id) => ({ q: `${labels.get(id) ?? "food"} restaurant`, type: id }))
         : [{ q: "restaurants", type: "restaurant" }];
     const cursors = queries.map((q) => ({ ...q, next: undefined as string | undefined, done: false, started: false }));
-    const never = this.d.store.neverIds();
+    const never = this.d.store.neverIds(owner);
     const moment: Moment = { location: req.location, when: req.when, ai: useAi };
     const raw: GPlace[] = [];
     let list: { p: GPlace; s: PlaceSummary }[] = [];
@@ -459,16 +469,16 @@ export class DiningService {
     return { enabled: true, items: src.items, summary: summary?.length ? summary : undefined };
   }
 
-  never(): NeverEntry[] {
-    return this.d.store.neverList();
+  never(owner: string): NeverEntry[] {
+    return this.d.store.neverList(owner);
   }
 
-  addNever(id: string, name: string, address?: string) {
-    this.d.store.addNever(id, name, address);
+  addNever(owner: string, id: string, name: string, address?: string) {
+    this.d.store.addNever(owner, id, name, address);
   }
 
-  removeNever(id: string) {
-    this.d.store.removeNever(id);
+  removeNever(owner: string, id: string) {
+    this.d.store.removeNever(owner, id);
   }
 
   autocomplete(input: string, near?: LatLng): Promise<LocationSuggestion[]> {

@@ -191,7 +191,7 @@ function service(places: GPlace[] | GPlace[][], withAi = true) {
 describe("DiningService", () => {
   it("searches restaurants in the circle's box, removes never-again places, and never uses likes", async () => {
     const { svc, store, google } = service([gplace(1), gplace(2), gplace(3)]);
-    store.addNever("place000002", "Place 2");
+    store.addNever("household", "place000002", "Place 2");
     const r = await svc.search({ location: HERE, radiusMiles: 3, filters: NOFILTER, sort: "best", ai: false });
     expect(r.places.map((p) => p.name)).toEqual(["Place 1", "Place 3"]);
     expect(google.calls[0]!.path).toBe("/v1/places:searchText");

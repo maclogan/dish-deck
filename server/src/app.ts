@@ -17,6 +17,7 @@ import { SearxngSearch } from "./sources/searxng.js";
 import { allSites, siteList } from "./sources/sites.js";
 import { RecipeSites, fromMealieScrape } from "./sources/webrecipes.js";
 import { Store } from "./store.js";
+import { AccessVerifier } from "./access.js";
 import { AiDining } from "./dining/ai.js";
 import { Chatter } from "./dining/chatter.js";
 import { PlacesClient } from "./dining/places.js";
@@ -140,6 +141,18 @@ export function rankCuisines(list: string[]): string[] {
   return [...list].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
 }
 
+/** Who is making a request: the household (everything), a guest (Eat out only), or nobody yet. */
+export type Caller = { role: "household"; email?: string } | { role: "guest"; email: string } | { role: "none" };
+
+declare module "fastify" {
+  interface FastifyRequest {
+    caller?: Caller;
+  }
+}
+
+/** Routes a guest may use. Everything else under /api/ is household-only, including routes added later. */
+const GUEST_ROUTES = (url: string) => url === "/api/config" || url === "/api/health" || url.startsWith("/api/dining/");
+
 /** Signed address of a Google place photo, served through this app. */
 export function diningPhotoUrl(passcode: string | undefined, name: string, width: number): string {
   const params = new URLSearchParams({ name, w: String(width) });
@@ -149,7 +162,7 @@ export function diningPhotoUrl(passcode: string | undefined, name: string, width
 
 export function buildApp(
   config: Config,
-  overrides: Partial<{ service: Service; mealie: MealieClient; store: Store; dining: DiningService | null }> = {},
+  overrides: Partial<{ service: Service; mealie: MealieClient; store: Store; dining: DiningService | null; access: AccessVerifier }> = {},
 ): FastifyInstance {
   const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? "info" } });
   const mealie = overrides.mealie ?? new MealieClient(config.mealieUrl, config.mealieToken);
@@ -225,11 +238,35 @@ export function buildApp(
     }
   }
 
-  // Optional shared passcode for the API (in addition to Cloudflare Access).
+  // Who's calling. Behind Cloudflare Access, its signed token says who signed in: a household email is the
+  // household, any other email is a guest. Otherwise (or as a fallback, e.g. on the home network) the
+  // household passcode. With neither configured the app is open, as before.
+  const access =
+    overrides.access ??
+    (config.cfAccessTeamDomain && config.cfAccessAud ? new AccessVerifier(config.cfAccessTeamDomain, config.cfAccessAud, fetch, warn) : undefined);
+  const household = new Set(config.householdEmails);
+  const whoIs = async (req: { headers: Record<string, string | string[] | undefined> }): Promise<Caller> => {
+    if (access) {
+      const email = await access.email(String(req.headers["cf-access-jwt-assertion"] ?? "") || undefined);
+      if (email) return household.has(email) ? { role: "household", email } : { role: "guest", email };
+    }
+    if (config.appPasscode) {
+      return safeEqual(String(req.headers["x-app-passcode"] ?? ""), config.appPasscode) ? { role: "household" } : { role: "none" };
+    }
+    return access ? { role: "none" } : { role: "household" };
+  };
+
   app.addHook("onRequest", async (req, reply) => {
-    if (!config.appPasscode) return;
     const url = req.url.split("?")[0]!;
-    if (!url.startsWith("/api/") || url === "/api/health" || url === "/api/config") return;
+    if (!url.startsWith("/api/") || url === "/api/health") return;
+    req.caller = await whoIs(req);
+    if (url === "/api/config") return;
+    if (req.caller.role === "guest") {
+      if (!GUEST_ROUTES(url)) return reply.code(403).send({ error: "Not available to guests" });
+      return;
+    }
+    if (req.caller.role === "household") return;
+    if (!config.appPasscode) return reply.code(401).send({ error: "Sign in required" });
     // <img> tags can't send the passcode header, so image URLs carry a signature instead.
     if (url.startsWith("/api/mealie-image/")) {
       const id = url.slice("/api/mealie-image/".length);
@@ -240,10 +277,7 @@ export function buildApp(
       const q = (req.query ?? {}) as { name?: string; w?: string; sig?: string };
       if (safeEqual(String(q.sig ?? ""), imageSig(config.appPasscode, `dining:${q.name ?? ""}:${q.w ?? ""}`))) return;
     }
-    const given = String(req.headers["x-app-passcode"] ?? "");
-    if (!safeEqual(given, config.appPasscode)) {
-      return reply.code(401).send({ error: "Passcode required" });
-    }
+    return reply.code(401).send({ error: "Passcode required" });
   });
 
   app.setErrorHandler((err, _req, reply) => {
@@ -260,16 +294,19 @@ export function buildApp(
 
   app.get("/api/health", async () => ({ ok: true }));
 
-  app.get("/api/config", async (): Promise<AppConfigResponse> => {
+  app.get("/api/config", async (req): Promise<AppConfigResponse> => {
+    const caller = req.caller ?? { role: "none" as const };
     const [cuisines, categories] = await Promise.all([
       mealdb.areas().catch(() => [] as string[]),
       mealdb.categories().catch(() => [] as string[]),
     ]);
     return {
       aiEnabled: !!ai,
-      passcodeRequired: !!config.appPasscode,
+      passcodeRequired: caller.role === "none" && !!config.appPasscode,
+      role: caller.role,
+      email: caller.role === "none" ? undefined : caller.email,
       busyDays: config.busyDays,
-      mealieUrl: config.mealiePublicUrl,
+      mealieUrl: caller.role === "household" ? config.mealiePublicUrl : undefined,
       cuisines: rankCuisines(cuisines.filter((c) => c !== "Unknown")),
       categories,
       dietary: DIETS,

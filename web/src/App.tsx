@@ -1,5 +1,5 @@
 import { useEffect, useState } from "preact/hooks";
-import { ApiError, api, hasPasscode, setPasscode, storageGet, storageSet, type AppConfigResponse, type PlanDay } from "./api";
+import { ApiError, api, setPasscode, storageGet, storageSet, type AppConfigResponse, type PlanDay } from "./api";
 import { Discover } from "./components/Discover";
 import { EatOut } from "./components/dining/EatOut";
 import { Week } from "./components/Week";
@@ -18,6 +18,7 @@ export function App() {
   const [configError, setConfigError] = useState<string | null>(null);
   const [needPasscode, setNeedPasscode] = useState(false);
   const [passInput, setPassInput] = useState("");
+  const [passError, setPassError] = useState<string | null>(null);
   const [tab, setTab] = useState<"discover" | "week" | "eat">(() => (storageGet("dishdeck.tab") === "eat" ? "eat" : "discover"));
   /** Discover is showing the "Our recipes" grid, which gets a wider page. */
   const [bookOpen, setBookOpen] = useState(false);
@@ -52,22 +53,25 @@ export function App() {
       });
   };
 
+  /** Ask the server who we are (Cloudflare sign-in or the saved passcode) and show the right app. */
+  const loadConfig = () =>
+    api.config().then((c) => {
+      setConfig(c);
+      setNeedPasscode(c.role === "none" && c.passcodeRequired);
+      if (c.role === "household") refreshWeek();
+      return c;
+    });
+
   useEffect(() => {
-    api
-      .config()
-      .then((c) => {
-        setConfig(c);
-        if (c.passcodeRequired && !hasPasscode()) setNeedPasscode(true);
-        else refreshWeek();
-      })
-      .catch((e) => setConfigError(e instanceof Error ? e.message : "Can't reach the server"));
+    loadConfig().catch((e) => setConfigError(e instanceof Error ? e.message : "Can't reach the server"));
   }, []);
 
   const submitPass = (e: Event) => {
     e.preventDefault();
     setPasscode(passInput.trim());
-    setNeedPasscode(false);
-    refreshWeek();
+    loadConfig()
+      .then((c) => setPassError(c.role === "none" ? "That passcode didn't work." : null))
+      .catch((err) => setPassError(err instanceof Error ? err.message : "Can't reach the server"));
   };
 
   if (configError) {
@@ -86,6 +90,7 @@ export function App() {
         <IconLock size={32} />
         <h1>Dish Deck</h1>
         <p class="muted">Enter the household passcode.</p>
+        {passError && <p class="pass-error" role="alert">{passError}</p>}
         <input
           type="password"
           autoComplete="current-password"
@@ -98,10 +103,37 @@ export function App() {
     );
   }
 
+  // Behind Cloudflare Access with no passcode fallback, but Cloudflare's sign-in didn't come through.
+  if (config.role === "none") {
+    return (
+      <div class="center">
+        <IconLock size={32} />
+        <h1>Dish Deck</h1>
+        <p class="muted">You're not signed in. Open this page again to sign in.</p>
+        <button class="btn primary" onClick={() => location.reload()}>Sign in</button>
+      </div>
+    );
+  }
+
+  // Guests (signed in through Cloudflare with an email outside the household) get the Eat out tab only.
+  const guest = config.role === "guest";
+  if (guest && !config.dining?.enabled) {
+    return (
+      <div class="center">
+        <h1>Dish Deck</h1>
+        <p class="muted">There's nothing here for guests yet.</p>
+      </div>
+    );
+  }
+  const shown = guest ? "eat" : tab;
+
   return (
     <div class="app">
-      <header class={`topbar ${tab === "discover" && bookOpen ? "wide" : ""}`}>
-        <h1>Dish Deck</h1>
+      <header class={`topbar ${shown === "discover" && bookOpen ? "wide" : ""}`}>
+        <div class="topbar-title">
+          <h1>Dish Deck</h1>
+          {guest && <span class="signed-in">Guest · {config.email}</span>}
+        </div>
         <div class="topbar-actions">
           {config.aiEnabled && (
             <button
@@ -109,7 +141,7 @@ export function App() {
               class={`ai-on ${aiOn ? "" : "off"}`}
               aria-pressed={aiOn}
               title={
-                tab === "eat"
+                shown === "eat"
                   ? aiOn
                     ? "AI is on: Claude reads searches and reviews for tags, size and reservation advice. Tap to turn off."
                     : "AI is off: plain Google search and Google's own details. Tap to turn on."
@@ -130,8 +162,8 @@ export function App() {
         </div>
       </header>
 
-      <main class={tab === "discover" && bookOpen ? "wide" : ""}>
-        {tab === "discover" ? (
+      <main class={`${shown === "discover" && bookOpen ? "wide" : ""} ${guest ? "no-tabbar" : ""}`}>
+        {shown === "discover" ? (
           <Discover
             config={config}
             aiOn={config.aiEnabled && aiOn}
@@ -141,14 +173,14 @@ export function App() {
             notify={notify}
             onWide={setBookOpen}
           />
-        ) : tab === "eat" && config.dining?.enabled ? (
+        ) : shown === "eat" && config.dining?.enabled ? (
           <EatOut config={config} aiOn={config.aiEnabled && aiOn} notify={notify} />
         ) : (
           <Week days={days} today={today} refreshWeek={refreshWeek} notify={notify} />
         )}
       </main>
 
-      <nav class="tabbar">
+      {!guest && <nav class="tabbar">
         <button class={tab === "discover" ? "on" : ""} onClick={() => pickTab("discover")}>
           <IconSparkle size={22} />
           <span>Discover</span>
@@ -163,7 +195,7 @@ export function App() {
             <span>Eat out</span>
           </button>
         )}
-      </nav>
+      </nav>}
 
       {toast && (
         <div class={`toast ${toast.error ? "error" : ""}`} role="status">

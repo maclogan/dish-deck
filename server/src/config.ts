@@ -46,6 +46,11 @@ export interface Config {
   googleMapsApiKey?: string;
   /** Browser key for the map view (restrict it to your site's address in Google Cloud). */
   googleMapsBrowserKey?: string;
+  /** Cloudflare Access (optional): team domain and application audience tag, to verify who is signed in. */
+  cfAccessTeamDomain?: string;
+  cfAccessAud?: string;
+  /** Signed-in emails that count as the household; every other email Cloudflare lets in is a guest. */
+  householdEmails: string[];
   /** Override for the Places API address (testing). */
   googlePlacesBaseUrl: string;
 }
@@ -157,6 +162,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     problems.push("PREFETCH_SECONDS_PER_SITE must be 0 (off) or between 1 and 3600");
   }
 
+  const cfTeam = get("CF_ACCESS_TEAM_DOMAIN")?.replace(/^https?:\/\//, "").replace(/\/+$/, "");
+  const cfAud = get("CF_ACCESS_AUD");
+  const householdEmails = (get("HOUSEHOLD_EMAILS") ?? "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
+  const cfSet = [cfTeam, cfAud, householdEmails.length ? "x" : undefined].filter(Boolean).length;
+  if (cfSet && cfSet < 3) problems.push("CF_ACCESS_TEAM_DOMAIN, CF_ACCESS_AUD and HOUSEHOLD_EMAILS go together: set all three, or none");
+  if (cfTeam && !/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(cfTeam)) problems.push(`CF_ACCESS_TEAM_DOMAIN should look like yourteam.cloudflareaccess.com (got ${JSON.stringify(cfTeam)})`);
+  for (const e of householdEmails) if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)) problems.push(`HOUSEHOLD_EMAILS has something that isn't an email: ${JSON.stringify(e)}`);
   for (const name of ["GOOGLE_MAPS_API_KEY", "GOOGLE_MAPS_BROWSER_KEY"]) {
     if (/\s/.test(get(name) ?? "")) problems.push(`${name} contains spaces or line breaks; paste it again as one line`);
   }
@@ -191,6 +203,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       : DEFAULT_STAPLES,
     appPasscode: get("APP_PASSCODE"),
     webDir: get("WEB_DIR") ?? path.resolve(here, "../../web/dist"),
+    cfAccessTeamDomain: cfTeam,
+    cfAccessAud: cfAud,
+    householdEmails,
     googleMapsApiKey: get("GOOGLE_MAPS_API_KEY"),
     googleMapsBrowserKey: get("GOOGLE_MAPS_BROWSER_KEY"),
     googlePlacesBaseUrl: get("GOOGLE_PLACES_BASE_URL")?.replace(/\/+$/, "") ?? "https://places.googleapis.com",

@@ -57,11 +57,13 @@ CREATE TABLE IF NOT EXISTS photos (
   json TEXT,
   at INTEGER NOT NULL
 );
-CREATE TABLE IF NOT EXISTS dining_never (
-  place_id TEXT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS dining_never_v2 (
+  owner TEXT NOT NULL,
+  place_id TEXT NOT NULL,
   name TEXT NOT NULL,
   address TEXT,
-  at INTEGER NOT NULL
+  at INTEGER NOT NULL,
+  PRIMARY KEY (owner, place_id)
 );
 CREATE TABLE IF NOT EXISTS dining_cache (
   key TEXT PRIMARY KEY,
@@ -87,6 +89,19 @@ export class Store {
     this.db = new DatabaseSync(file);
     this.db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;");
     this.db.exec(SCHEMA);
+    // The never-again list used to be the household's only; it's now kept per person (household or guest).
+    const old = this.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'dining_never'").get();
+    if (old) {
+      this.db.exec("BEGIN");
+      try {
+        this.db.exec("INSERT OR IGNORE INTO dining_never_v2 (owner, place_id, name, address, at) SELECT 'household', place_id, name, address, at FROM dining_never");
+        this.db.exec("DROP TABLE dining_never");
+        this.db.exec("COMMIT");
+      } catch (err) {
+        this.db.exec("ROLLBACK");
+        throw err;
+      }
+    }
     // Added after the first release: which diets and meals each recipe fits (",vegan,gluten-free,").
     for (const [table, col] of [["recipes", "diets"], ["recipes", "meals"], ["sites", "robots"]]) {
       try {
@@ -307,9 +322,9 @@ export class Store {
 
   // ------------------------------------------------------------------ eat out
 
-  /** Places the household never wants suggested again, newest first. */
-  neverList(): { id: string; name: string; address?: string; at: number }[] {
-    return (this.db.prepare("SELECT place_id, name, address, at FROM dining_never ORDER BY at DESC").all() as unknown as {
+  /** Places this person ("household" or "guest:<email>") never wants suggested again, newest first. */
+  neverList(owner: string): { id: string; name: string; address?: string; at: number }[] {
+    return (this.db.prepare("SELECT place_id, name, address, at FROM dining_never_v2 WHERE owner = ? ORDER BY at DESC").all(owner) as unknown as {
       place_id: string;
       name: string;
       address: string | null;
@@ -317,16 +332,18 @@ export class Store {
     }[]).map((r) => ({ id: r.place_id, name: r.name, address: r.address ?? undefined, at: r.at }));
   }
 
-  neverIds(): Set<string> {
-    return new Set((this.db.prepare("SELECT place_id FROM dining_never").all() as unknown as { place_id: string }[]).map((r) => r.place_id));
+  neverIds(owner: string): Set<string> {
+    return new Set((this.db.prepare("SELECT place_id FROM dining_never_v2 WHERE owner = ?").all(owner) as unknown as { place_id: string }[]).map((r) => r.place_id));
   }
 
-  addNever(id: string, name: string, address?: string) {
-    this.db.prepare("INSERT OR REPLACE INTO dining_never (place_id, name, address, at) VALUES (?, ?, ?, ?)").run(id, name, address ?? null, Date.now());
+  addNever(owner: string, id: string, name: string, address?: string) {
+    this.db
+      .prepare("INSERT OR REPLACE INTO dining_never_v2 (owner, place_id, name, address, at) VALUES (?, ?, ?, ?, ?)")
+      .run(owner, id, name, address ?? null, Date.now());
   }
 
-  removeNever(id: string) {
-    this.db.prepare("DELETE FROM dining_never WHERE place_id = ?").run(id);
+  removeNever(owner: string, id: string) {
+    this.db.prepare("DELETE FROM dining_never_v2 WHERE owner = ? AND place_id = ?").run(owner, id);
   }
 
   diningGet<T>(key: string, maxAge: number): T | undefined {
