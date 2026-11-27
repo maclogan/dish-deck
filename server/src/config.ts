@@ -42,6 +42,16 @@ export interface Config {
   staples: string[];
   appPasscode?: string;
   webDir: string;
+  /** "Eat out" tab: Google Places key (server only). The tab is hidden without it. */
+  googleMapsApiKey?: string;
+  /** Browser key for the map view (restrict it to your site's address in Google Cloud). */
+  googleMapsBrowserKey?: string;
+  /** Override for the Places API address (testing). */
+  googlePlacesBaseUrl: string;
+  /** Address to search around when the phone's location isn't available. */
+  diningDefaultLocation?: string;
+  diningRadiusMiles: number;
+  diningUnits: "mi" | "km";
 }
 
 export class ConfigError extends Error {}
@@ -123,7 +133,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   if (!mealieToken) problems.push("MEALIE_TOKEN is required (Mealie > your profile > API Tokens)");
   else if (/\s/.test(mealieToken)) problems.push("MEALIE_TOKEN contains spaces or line breaks; paste it again as one line");
-  for (const name of ["MEALIE_PUBLIC_URL", "MEALDB_BASE_URL", "WIKIPEDIA_API_URL", "SEARXNG_URL"]) {
+  for (const name of ["MEALIE_PUBLIC_URL", "MEALDB_BASE_URL", "WIKIPEDIA_API_URL", "SEARXNG_URL", "GOOGLE_PLACES_BASE_URL"]) {
     const v = get(name);
     const p = v ? urlProblem(name, v) : undefined;
     if (p) problems.push(p);
@@ -149,6 +159,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const prefetch = Number(get("PREFETCH_SECONDS_PER_SITE") ?? 5);
   if (!Number.isFinite(prefetch) || (prefetch !== 0 && (prefetch < 1 || prefetch > 3600))) {
     problems.push("PREFETCH_SECONDS_PER_SITE must be 0 (off) or between 1 and 3600");
+  }
+
+  const radius = Number(get("DINING_RADIUS_MILES") ?? 3);
+  if (!Number.isFinite(radius) || radius < 0.25 || radius > 30) problems.push("DINING_RADIUS_MILES must be between 0.25 and 30");
+  const units = (get("DINING_UNITS") ?? "mi").toLowerCase();
+  if (units !== "mi" && units !== "km") problems.push("DINING_UNITS must be mi or km");
+  for (const name of ["GOOGLE_MAPS_API_KEY", "GOOGLE_MAPS_BROWSER_KEY"]) {
+    if (/\s/.test(get(name) ?? "")) problems.push(`${name} contains spaces or line breaks; paste it again as one line`);
   }
 
   if (problems.length) {
@@ -181,5 +199,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       : DEFAULT_STAPLES,
     appPasscode: get("APP_PASSCODE"),
     webDir: get("WEB_DIR") ?? path.resolve(here, "../../web/dist"),
+    googleMapsApiKey: get("GOOGLE_MAPS_API_KEY"),
+    googleMapsBrowserKey: get("GOOGLE_MAPS_BROWSER_KEY"),
+    googlePlacesBaseUrl: get("GOOGLE_PLACES_BASE_URL")?.replace(/\/+$/, "") ?? "https://places.googleapis.com",
+    diningDefaultLocation: get("DINING_DEFAULT_LOCATION"),
+    diningRadiusMiles: radius,
+    diningUnits: units as Config["diningUnits"],
   };
 }

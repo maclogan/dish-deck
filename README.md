@@ -1,6 +1,6 @@
 # Dish Deck
 
-**Swipe through meal ideas, cook with what's on hand, and plan the week in [Mealie](https://mealie.io).**
+**Swipe through meal ideas, cook with what's on hand, plan the week in [Mealie](https://mealie.io), and when nobody wants to cook, find somewhere to eat today.**
 
 Dish Deck is a small, mobile-first web app you install on your phone (it's a PWA). It sits in front of your self-hosted Mealie server: everything you save goes straight into Mealie, and Dish Deck keeps no database of its own.
 
@@ -27,6 +27,7 @@ Dish Deck is a small, mobile-first web app you install on your phone (it's a PWA
   - recently eaten meals are avoided
   - proteins rotate, and proteins you have on hand get a boost
   - busy days get quick dinners
+- **Eat out** (optional tab, needs a Google Maps key): find somewhere to eat today. See [Eat out](#eat-out).
 - Light and dark mode, works offline for the app shell, optional household passcode.
 
 ## How it fits together
@@ -37,7 +38,8 @@ Dish Deck is a small, mobile-first web app you install on your phone (it's a PWA
                        │          ├──► TheMealDB API     (free recipe ideas)
                        │          ├──► Claude API        (optional: dish names, AI recipes)
                        │          ├──► Wikipedia/Pexels  (photos when a recipe has none)
-                       │          └──► SearXNG           (optional free search fallback)
+                       │          ├──► Google Places     (optional: Eat out tab)
+                       │          └──► SearXNG           (optional free search fallback, local restaurant chatter)
                        └── /data: SQLite cache + household history
 ```
 
@@ -59,6 +61,8 @@ All configuration lives in a single **`.env`** file. Copy [`example.env`](exampl
 | `MEALIE_TOKEN` | **Yes** | **Yes** | Read recipes and foods, create recipes and meal plans | Mealie → your profile → **API Tokens** → Create. Recipes and plans are created as this user, in their household. |
 | `APP_PASSCODE` | Strongly recommended | **Yes** | Shared passcode each device enters once | Make one up, or run `openssl rand -base64 12` |
 | `ANTHROPIC_API_KEY` | Optional | **Yes** | AI recipe ideas when you type a craving | [console.anthropic.com](https://console.anthropic.com) → Settings → API Keys. Pay-as-you-go billing must be set up. |
+| `GOOGLE_MAPS_API_KEY` | Optional | **Yes** | Turns on the Eat out tab (Places API (New)) | Google Cloud console → APIs & Services → Credentials. See [Eat out](#eat-out). |
+| `GOOGLE_MAPS_BROWSER_KEY` | Optional | Restrict it (it reaches the browser) | Map view on the Eat out tab (Maps JavaScript API) | Same place; restrict to your site's address |
 | `MEALDB_API_KEY` | Optional | Treat as secret if premium | TheMealDB access | Default `1` is the free test key (personal/development use). A premium key comes with supporting TheMealDB: [themealdb.com/api.php](https://www.themealdb.com/api.php) |
 
 Everything else is a plain setting with a sensible default (see [Configuration](#configuration)).
@@ -168,6 +172,11 @@ Every setting is documented in [`example.env`](example.env). Variables set in th
 | `PLAN_START` | `today` | First day of the 7-day plan: `today`, `tomorrow`, `monday`, `sunday` |
 | `LEFTOVERS` | `true` | Turn leftover-friendly dinners into next-day lunches |
 | `STAPLES` | salt, pepper, water, oils, sugar, flour, butter | Ingredients never counted as missing |
+| `GOOGLE_MAPS_API_KEY` | (none) | Eat out tab: Google Places key (server only) |
+| `GOOGLE_MAPS_BROWSER_KEY` | (none) | Eat out tab: Map view key (restricted browser key) |
+| `DINING_DEFAULT_LOCATION` | (none) | Address to search around when a phone won't share its location |
+| `DINING_RADIUS_MILES` | `3` | Default search radius (0.25–30 miles) |
+| `DINING_UNITS` | `mi` | Distances in `mi` or `km` |
 | `PORT` | `8080` | Port to listen on |
 | `LOG_LEVEL` | `info` | `fatal`, `error`, `warn`, `info`, `debug` |
 | `ENV_FILE` | `.env` | Path of the env file to load (Node only) |
@@ -225,19 +234,45 @@ Everything is cached in `DATA_DIR`: site indexes, recipes, dish lists, which pag
 
 Recipes stay their authors' work: cards link to the original page, and saved recipes keep that link in Mealie.
 
+## Eat out
+
+The **Eat out** tab helps decide where to eat today and find new places. It appears when `GOOGLE_MAPS_API_KEY` is set.
+
+- **Where and when:** uses the phone's location (or type an address, or pick a saved Home/Work or recent spot) and a time today (now, lunch, dinner or any time). Opening hours are checked for that time.
+- **Search for a vibe:** type what you're after ("cozy hole-in-the-wall", "date night", "cheap tacos open late"). With AI on, Claude turns it into a Google search plus filters, then reads each result's reviews and reranks them, with a line on why each one fits. With AI off it's a plain Google search.
+- **Filters:** distance, open at the chosen time, rating, price, chain or independent, cuisine, dine-in/takeout/delivery, outdoor seating, groups, kids, vegetarian, takes reservations. Sort by best match, nearest, top rated or **hidden gems** (well loved, not many reviews yet, independent).
+- **Each place shows** rating, price, distance, hours, chain or independent, its most important facts as tags, size, and whether you need a reservation, plus links to its **Google listing** and **website**. Open it for photos, directions, phone, an AI summary of reviews, *What locals say* (city subreddit, local blogs and news, via SearXNG), and Google's reviews. How busy a place gets isn't estimated; Google's popular times are on its Google listing.
+- **Display:** a List, Deck (one at a time, swipe) or Map view, remembered per phone.
+- **Today only:** star places to a shortlist and compare them side by side; swipe a place left to hide it for today. Both clear tomorrow and never affect future searches.
+- **Never show again:** the one thing that lasts. It's kept for the whole household (every phone), and the list in the tab lets you bring a place back.
+
+**With AI off** you still get Google's results, filters and details. What you lose: the vibe search becomes a keyword search with no reranking; tags are only Google's yes/no attributes (outdoor seating, takes reservations, …) instead of things like *cash only*, *tiny* or *long waits*; there's no size estimate or review summary; reservation advice uses Google's "takes reservations" flag and price only; local chatter shows as a list of links instead of a summary.
+
+**Chain detection** uses OpenStreetMap's [name-suggestion-index](https://github.com/osmlab/name-suggestion-index) brand list (BSD-3-Clause, bundled in `server/src/dining/chains-data.ts`; refresh it with `scripts/build-chains.ts`), plus names that appear more than once nearby and Google's fast-food category.
+
+### Setting up Google
+
+1. In the [Google Cloud console](https://console.cloud.google.com), create a project, turn on billing, and enable **Places API (New)** (and **Maps JavaScript API** for the Map view).
+2. Create an API key, restrict it to Places API (New), and put it in `GOOGLE_MAPS_API_KEY`. This key stays on the server.
+3. Optional: create a second key for the Map view, restricted to **HTTP referrers** (your Dish Deck address) and the **Maps JavaScript API**, and put it in `GOOGLE_MAPS_BROWSER_KEY`. This one is sent to browsers, which is why it must be restricted.
+4. Recommended: set a **budget alert** and per-day **quotas** on the APIs, so a bug can't run up a bill.
+
+Each search is one Places request that includes reviews and dine-in/outdoor/reservation details (Google's "Enterprise + Atmosphere" price), so opening a place afterwards costs nothing extra. Photos are fetched through the server and cached by the browser. Dish Deck stores only Google place IDs on disk (the never-again list); Google's content is kept in memory for up to an hour.
+
 ## Costs and limits
 
 - **TheMealDB's free key** covers a limited catalog (a few hundred meals); it's now mostly a backup.
 - **AI** is used for dish names (a short request, cached and reused across many decks), nutrition goals (Claude writes those recipes, since sites rarely list nutrition), and recipes no site has. Haiku is the cheapest model, and you pay per use on your own key.
 - **Recipe sites, photo lookups (Wikipedia, Pexels) and SearXNG** are free.
 - **Planner and saved-recipe features** run entirely against Mealie and cost nothing.
+- **Eat out:** Google gives a free allowance each month per kind of request (about 1,000 searches, 1,000 photo loads, 10,000 address lookups and map loads at the time of writing; check [Google's pricing](https://developers.google.com/maps/billing-and-pricing/pricing)). A household eating out a few times a week usually stays inside it; past it, a search costs about 4 cents and a photo under 1 cent. AI for this tab (search planning, reranking, tags and summaries) costs well under a dollar a month on Haiku.
 
 ## Development
 
 ```bash
 npm install
 npm run dev:mock          # fake Mealie + TheMealDB on :9100 (no real data touched)
-npm run dev:server:mock   # API server on :8080 using dev/mock.env
+npm run dev:server:mock   # API server on :8080 using dev/mock.env (includes a fake Google Places for Eat out)
 # The mock also fakes Claude, two recipe sites and SearXNG, to try the whole flow offline:
 # ANTHROPIC_API_KEY=dev ANTHROPIC_BASE_URL=http://localhost:9100 DEV_SITE_PROXY=http://localhost:9100 DATA_DIR=./data npm run dev:server:mock
 npm run dev:web           # UI with hot reload on http://localhost:5173

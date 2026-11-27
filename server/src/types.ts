@@ -1,5 +1,9 @@
 // Shared types used by the server and (type-only) by the web app.
 
+import type { DiningConfig } from "./dining/types.js";
+
+export type * from "./dining/types.js";
+
 /** mealdb: TheMealDB. web: a real recipe read from a trusted site. ai: written by Claude. mealie: saved. */
 export type CardSource = "mealdb" | "web" | "ai" | "mealie";
 export type MealType = "lunch" | "dinner";
@@ -189,4 +193,6 @@ export interface AppConfigResponse {
   meals: FilterOption<MealFilter>[];
   goals: FilterOption<GoalId>[];
   styles: FilterOption<StyleId>[];
+  /** The "Eat out" tab (enabled when GOOGLE_MAPS_API_KEY is set). */
+  dining: DiningConfig;
 }

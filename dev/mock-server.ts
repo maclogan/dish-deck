@@ -3,6 +3,7 @@
 // Then: MEALIE_URL=http://localhost:9100 MEALIE_TOKEN=dev MEALDB_BASE_URL=http://localhost:9100 npm run dev:server
 
 import Fastify from "fastify";
+import { chatterResults, diningClaude, registerPlacesMock } from "./mock-places.js";
 
 const ALL_AREAS = ["Algerian", "American", "Argentinian", "Australian", "British", "Canadian", "Chinese", "Croatian", "Dutch", "Egyptian", "Filipino", "French", "Greek", "Indian", "Irish", "Italian", "Jamaican", "Japanese", "Kenyan", "Malaysian", "Mexican", "Moroccan", "Norwegian", "Polish", "Portuguese", "Russian", "Saudi Arabian", "Slovakian", "Spanish", "Syrian", "Thai", "Tunisian", "Turkish", "Ukrainian", "Uruguayan", "Venezulan", "Vietnamese"];
 const app = Fastify();
@@ -264,6 +265,8 @@ app.post<{ Body: { messages: { content: string }[]; tool_choice?: { name?: strin
     usage: { input_tokens: 1, output_tokens: 1 },
     content: [{ type: "tool_use", id: "toolu_mock", name, input }],
   });
+  const dining = diningClaude(req.body.tool_choice?.name, prompt);
+  if (dining) return reply(req.body.tool_choice!.name!, dining);
   // Names only (the cheap first step): the real dishes, then numbered extras on later calls.
   if (req.body.tool_choice?.name === "suggest_dishes") {
     dishCalls++;
@@ -342,10 +345,14 @@ app.get<{ Params: { domain: string; "*": string } }>("/site/:domain/*", async (r
 
 // ---------------------------------------------------------------- fake SearXNG (SEARXNG_URL=http://localhost:9100)
 app.get<{ Querystring: { q?: string } }>("/search", async (req) => {
+  const chatter = chatterResults(req.query.q ?? "");
+  if (chatter) return { results: chatter };
   const q = (req.query.q ?? "").toLowerCase();
   const domain = /site:(\S+)/.exec(q)?.[1] ?? "";
   const hits = (SITE_DISHES[domain] ?? []).filter((d) => q.includes(d.toLowerCase().split(" ")[0]!));
   return { results: hits.map((d) => ({ url: `https://${domain}/${slug(d)}/`, title: d })) };
 });
+
+registerPlacesMock(app, svg);
 
 app.listen({ port: 9100, host: "0.0.0.0" }).then(() => console.log("mock Mealie + TheMealDB on :9100"));

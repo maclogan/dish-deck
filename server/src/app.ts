@@ -17,6 +17,11 @@ import { SearxngSearch } from "./sources/searxng.js";
 import { allSites, siteList } from "./sources/sites.js";
 import { RecipeSites, fromMealieScrape } from "./sources/webrecipes.js";
 import { Store } from "./store.js";
+import { AiDining } from "./dining/ai.js";
+import { Chatter } from "./dining/chatter.js";
+import { PlacesClient } from "./dining/places.js";
+import { registerDining } from "./dining/routes.js";
+import { DiningService } from "./dining/service.js";
 import type { AppConfigResponse } from "./types.js";
 
 const mealType = z.enum(["lunch", "dinner"]);
@@ -135,7 +140,17 @@ export function rankCuisines(list: string[]): string[] {
   return [...list].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
 }
 
-export function buildApp(config: Config, overrides: Partial<{ service: Service; mealie: MealieClient; store: Store }> = {}): FastifyInstance {
+/** Signed address of a Google place photo, served through this app. */
+export function diningPhotoUrl(passcode: string | undefined, name: string, width: number): string {
+  const params = new URLSearchParams({ name, w: String(width) });
+  if (passcode) params.set("sig", imageSig(passcode, `dining:${name}:${width}`));
+  return `/api/dining/photo?${params}`;
+}
+
+export function buildApp(
+  config: Config,
+  overrides: Partial<{ service: Service; mealie: MealieClient; store: Store; dining: DiningService | null }> = {},
+): FastifyInstance {
   const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? "info" } });
   const mealie = overrides.mealie ?? new MealieClient(config.mealieUrl, config.mealieToken);
   const mealdb = new MealDb(config.mealdbKey, fetch, config.mealdbBaseUrl);
@@ -164,6 +179,25 @@ export function buildApp(config: Config, overrides: Partial<{ service: Service; 
     search: config.searxngUrl ? new SearxngSearch(config.searxngUrl) : undefined,
   });
   const service = overrides.service ?? new Service({ config, mealie, mealdb, ai, photos, store, sites, siteMap, warn });
+  // "Eat out" tab: only with a Google Maps key. Shares the store, AI key and SearXNG with the recipe side.
+  const dining =
+    overrides.dining !== undefined
+      ? overrides.dining ?? undefined
+      : config.googleMapsApiKey
+        ? new DiningService({
+            places: new PlacesClient(config.googleMapsApiKey, config.googlePlacesBaseUrl),
+            store,
+            ai: config.anthropicApiKey ? new AiDining(config.anthropicApiKey, config.anthropicModel) : undefined,
+            chatter: config.searxngUrl ? new Chatter(config.searxngUrl) : undefined,
+            timezone: config.timezone,
+            radiusMiles: config.diningRadiusMiles,
+            units: config.diningUnits,
+            defaultLocation: config.diningDefaultLocation,
+            mapsBrowserKey: config.googleMapsBrowserKey,
+            photoUrl: (name, width) => diningPhotoUrl(config.appPasscode, name, width),
+            warn,
+          })
+        : undefined;
 
   // Index the trusted sites in the background (each refreshes weekly), so the first deal is quick.
   if (!overrides.service && !overrides.store) {
@@ -205,6 +239,10 @@ export function buildApp(config: Config, overrides: Partial<{ service: Service; 
       const sig = String((req.query as { sig?: string } | undefined)?.sig ?? "");
       if (safeEqual(sig, imageSig(config.appPasscode, id))) return;
     }
+    if (url === "/api/dining/photo") {
+      const q = (req.query ?? {}) as { name?: string; w?: string; sig?: string };
+      if (safeEqual(String(q.sig ?? ""), imageSig(config.appPasscode, `dining:${q.name ?? ""}:${q.w ?? ""}`))) return;
+    }
     const given = String(req.headers["x-app-passcode"] ?? "");
     if (!safeEqual(given, config.appPasscode)) {
       return reply.code(401).send({ error: "Passcode required" });
@@ -241,8 +279,11 @@ export function buildApp(config: Config, overrides: Partial<{ service: Service; 
       meals: MEALS,
       goals: GOALS,
       styles: STYLES,
+      dining: dining?.config(true) ?? { enabled: false, chatter: false, radiusMiles: config.diningRadiusMiles, units: config.diningUnits, cuisines: [] },
     };
   });
+
+  registerDining(app, dining);
 
   app.post("/api/deck", async (req) => service.deck(deckSchema.parse(req.body)));
   app.post("/api/save", async (req) => service.save(saveSchema.parse(req.body)));
