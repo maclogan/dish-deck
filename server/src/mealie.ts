@@ -86,7 +86,7 @@ type Query = Record<string, string | number | boolean | string[] | undefined>;
 export class MealieClient {
   constructor(private baseUrl: string, private token: string, private fetchImpl: typeof fetch = fetch) {}
 
-  private async req<T>(method: string, path: string, opts: { query?: Query; body?: unknown } = {}): Promise<T> {
+  private async req<T>(method: string, path: string, opts: { query?: Query; body?: unknown; timeoutMs?: number } = {}): Promise<T> {
     const url = new URL(`/api${path}`, this.baseUrl);
     for (const [k, v] of Object.entries(opts.query ?? {})) {
       if (v === undefined) continue;
@@ -101,7 +101,7 @@ export class MealieClient {
         ...(opts.body !== undefined ? { "Content-Type": "application/json" } : {}),
       },
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-      signal: AbortSignal.timeout(60_000),
+      signal: AbortSignal.timeout(opts.timeoutMs ?? 60_000),
     });
     const text = await res.text();
     if (!res.ok) {
@@ -183,7 +183,8 @@ export class MealieClient {
 
   /** Run Mealie's scraper on a page without saving anything (for pages without schema.org data). */
   async testScrape(url: string): Promise<unknown> {
-    return this.req<unknown>("POST", "/recipes/test-scrape-url", { body: { url } });
+    // A backup reader for odd pages: don't let a slow site hold up a deck.
+    return this.req<unknown>("POST", "/recipes/test-scrape-url", { body: { url }, timeoutMs: 20_000 });
   }
 
   async setImageFromUrl(slug: string, imageUrl: string): Promise<void> {

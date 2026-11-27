@@ -1,3 +1,4 @@
+import { MealDb } from "../src/sources/mealdb.js";
 import { describe, expect, it } from "vitest";
 import { buildOnHandMatcher, coreIngredient, detectProtein, onHandProteins } from "../src/ingredients.js";
 import { toSchemaOrg } from "../src/service.js";
@@ -85,5 +86,41 @@ describe("TheMealDB mapping", () => {
   it("keeps desserts out of the Dinner category", () => {
     const json = toSchemaOrg(mealDbToCard({ ...teriyakiMeal, strCategory: "Dessert" }));
     expect(json.recipeCategory).toEqual(["Dessert"]);
+  });
+});
+
+describe("TheMealDB typed searches", () => {
+  const fakeFetch = (routes: Record<string, unknown>) =>
+    (async (input: URL | RequestInfo) => {
+      const url = new URL(String(input));
+      const key = `${url.pathname.split("/").pop()}?${url.searchParams.toString()}`;
+      return new Response(JSON.stringify(routes[key] ?? { meals: null }));
+    }) as typeof fetch;
+  const lists = {
+    "list.php?a=list": { meals: [{ strArea: "Italian" }, { strArea: "Japanese" }] },
+    "list.php?c=list": { meals: [{ strCategory: "Beef" }, { strCategory: "Dessert" }] },
+  };
+
+  it("looks a dish up by name before falling back to a whole category", async () => {
+    const db = new MealDb("1", fakeFetch({
+      ...lists,
+      "search.php?s=beef+roll": { meals: [{ idMeal: "9", strMeal: "Beef Rolls" }] },
+      "filter.php?c=Beef": { meals: [{ idMeal: "1", strMeal: "Massaman Beef curry" }] },
+    }));
+    const r = await db.candidates({ mood: "beef roll", want: 8 });
+    expect(r.refs.map((x) => x.id)).toEqual(["9"]);
+    expect(r.note).toBe('Matches for "beef roll"');
+  });
+
+  it("treats a search that is just a type or cuisine as the whole type or cuisine", async () => {
+    const db = new MealDb("1", fakeFetch({ ...lists, "filter.php?c=Beef": { meals: [{ idMeal: "1", strMeal: "Massaman Beef curry" }] } }));
+    const r = await db.candidates({ mood: "Beef", want: 8 });
+    expect(r.refs.map((x) => x.id)).toEqual(["1"]);
+  });
+
+  it("falls back to the category when no dish name matches", async () => {
+    const db = new MealDb("1", fakeFetch({ ...lists, "filter.php?c=Beef": { meals: [{ idMeal: "1", strMeal: "Massaman Beef curry" }] } }));
+    const r = await db.candidates({ mood: "beef surprise", want: 8 });
+    expect(r.refs.map((x) => x.id)).toEqual(["1"]);
   });
 });

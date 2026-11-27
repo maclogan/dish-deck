@@ -235,7 +235,8 @@ export class AiRecipes {
   private client: Anthropic;
 
   constructor(apiKey: string, private model: string, private household: string) {
-    this.client = new Anthropic({ apiKey });
+    // The SDK waits up to 10 minutes (with 2 retries) by default; a deck shouldn't.
+    this.client = new Anthropic({ apiKey, timeout: 45_000, maxRetries: 1 });
   }
 
   /** The shared part of both prompts: what to suggest, for whom, with which filters. */

@@ -112,7 +112,7 @@ export class PhotoFinder {
       ...params,
     };
     for (const [k, v] of Object.entries(all)) url.searchParams.set(k, v);
-    const res = await this.fetch(url, { headers: { "User-Agent": USER_AGENT, "Api-User-Agent": USER_AGENT } });
+    const res = await this.fetch(url, { headers: { "User-Agent": USER_AGENT, "Api-User-Agent": USER_AGENT }, signal: AbortSignal.timeout(8_000) });
     if (!res.ok) throw new Error(`Wikipedia ${res.status}`);
     const data = (await res.json()) as { query?: { pages?: WikiPage[] } };
     return data.query?.pages ?? [];
@@ -172,7 +172,7 @@ export class PhotoFinder {
     url.searchParams.set("query", `${query} food`);
     url.searchParams.set("per_page", "1");
     url.searchParams.set("orientation", "landscape");
-    const res = await this.fetch(url, { headers: { Authorization: this.opts.pexelsKey } });
+    const res = await this.fetch(url, { headers: { Authorization: this.opts.pexelsKey }, signal: AbortSignal.timeout(8_000) });
     if (!res.ok) throw new Error(`Pexels ${res.status}`);
     const data = (await res.json()) as {
       photos?: { url: string; photographer: string; src: { large?: string; medium?: string } }[];

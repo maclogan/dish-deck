@@ -29,7 +29,7 @@ import {
 import { classifyRecipe, planWeek, slotKey, type ExistingSlot } from "./planner.js";
 import { nextRegions, type AiCard, type AiRecipes, type DishIdea } from "./sources/ai.js";
 import { allSites, sitesFor } from "./sources/sites.js";
-import { webRecipeToCard, type RecipeSites, type WebRecipe } from "./sources/webrecipes.js";
+import { nameFromUrl, searchScore, webRecipeToCard, type RecipeSites, type WebRecipe } from "./sources/webrecipes.js";
 import type { Store } from "./store.js";
 import { mealDbToCard, type MealDb } from "./sources/mealdb.js";
 import type {
@@ -49,7 +49,7 @@ import type {
   SaveResponse,
   WeekResponse,
 } from "./types.js";
-import { addDays, mapLimit, normalize, parseMinutes, planDates, shuffle, slugify, toIsoDuration } from "./util.js";
+import { addDays, mapLimit, normalize, parseMinutes, planDates, shuffle, slugify, toIsoDuration, withTimeout } from "./util.js";
 import type { PhotoFinder, PhotoQuery } from "./sources/photos.js";
 
 export interface Deps {
@@ -64,6 +64,8 @@ export interface Deps {
   /** Real recipes from trusted sites, and the sites per cuisine. */
   sites?: RecipeSites;
   siteMap?: Record<string, string[]>;
+  /** Time limits (ms): matching dish names to pages, and a whole new-ideas deck. Tests shorten them. */
+  limits?: { matchMs?: number; deckMs?: number };
   now?: () => Date;
   /** Reports recoverable problems (e.g. an AI failure we fell back from). */
   warn?: (message: string) => void;
@@ -170,7 +172,13 @@ export class Service {
 
   async deck(input: DeckRequest): Promise<DeckResponse> {
     const req = toDeckQuery(input);
-    return req.source === "saved" ? this.savedDeck(req) : this.newDeck(req);
+    if (req.source === "saved") return this.savedDeck(req);
+    // Never leave the phone spinning: answer within the limit. Slow lookups carry on in the background
+    // and land in the cache, so trying again right after is quick.
+    return withTimeout(this.newDeck(req), this.deps.limits?.deckMs ?? 55_000, () => {
+      this.deps.warn?.("A new-ideas deck took too long; answered early");
+      return { cards: [], note: "That took too long. Try again: what was found so far is saved, so the next try is quicker." };
+    });
   }
 
   private async savedDeck(req: DeckQuery): Promise<DeckResponse> {
@@ -335,9 +343,11 @@ export class Service {
     const sites = this.deps.sites!;
     const store = this.deps.store;
     const siteMap = this.deps.siteMap ?? {};
-    const cuisineSites = sitesFor(siteMap, req.cuisines);
-    // A typed search also looks through the general sites.
-    const domains = req.mood?.trim() && req.cuisines.length ? [...new Set([...cuisineSites, ...sitesFor(siteMap, [])])] : cuisineSites;
+    // A cuisine looks at that cuisine's sites (then the general ones for a typed search); a typed search
+    // without a cuisine looks through every trusted site, general ones first.
+    const domains = req.cuisines.length
+      ? [...new Set([...sitesFor(siteMap, req.cuisines), ...(req.mood?.trim() ? sitesFor(siteMap, []) : [])])]
+      : [...new Set([...sitesFor(siteMap, []), ...allSites(siteMap)])];
     const matchKey = (d: DishIdea) => `${normalize(d.name)}|${domains.join(",")}`;
     const used = (d: DishIdea) => {
       if (ctx.bookNames.has(normalize(d.name)) || ctx.seen.has(`ai:${slugify(d.name)}`)) return true;
@@ -345,6 +355,8 @@ export class Service {
       return !!url && ctx.seen.has(`web:${url}`);
     };
     const want = req.count;
+    const started = Date.now();
+    const matchMs = this.deps.limits?.matchMs ?? 15_000;
     // Ask Claude for more names only when the saved list can't fill this deck.
     const dishes = await this.dishPool(req, (d) => !used(d), want, ctx.book);
     const candidates = shuffle(dishes.filter((d) => !used(d))).slice(0, want * 3);
@@ -353,7 +365,9 @@ export class Service {
     const missing: DishIdea[] = [];
     // Two dish names can land on the same page ("Red-braised pork" and "Hong shao rou").
     const taken = new Set<string>();
-    for (let i = 0; i < candidates.length && found.length < want; i += 4) {
+    // Stop looking once the time budget is used up: show what's found, and the lookups already started
+    // still finish and get cached for next time.
+    for (let i = 0; i < candidates.length && found.length < want && Date.now() - started < matchMs; i += 4) {
       const batch = await mapLimit(candidates.slice(i, i + 4), 4, async (d) => {
         const key = matchKey(d);
         const cached = store?.getMatch(key, 90 * 86400_000, 30 * 86400_000);
@@ -388,11 +402,12 @@ export class Service {
       }
     }
 
-    // No page for some dishes: have Claude write those, clearly marked as AI recipes.
-    if (found.length < want && missing.length && this.deps.ai) {
-      const only = missing.slice(0, want - found.length);
+    // No page for some dishes: have Claude write a few of those, clearly marked as AI recipes (only
+    // while there's time left; writing recipes is the slowest step).
+    if (found.length < want && missing.length && this.deps.ai && Date.now() - started < matchMs * 1.5) {
+      const only = missing.slice(0, Math.min(4, want - found.length));
       try {
-        const written = await this.deps.ai.generate({
+        const written = await withTimeout(this.deps.ai.generate({
           only,
           cuisines: req.cuisines,
           dietary: req.dietary,
@@ -402,6 +417,9 @@ export class Service {
           leniency: req.leniency,
           avoid: [],
           bookSample: [],
+        }), 30_000, () => {
+          this.deps.warn?.("AI recipes for unmatched dishes took too long; skipped this time");
+          return [];
         });
         const ok = written.filter((c) => fitsDiet(c.ingredients, req.dietary ?? []) && !ctx.seen.has(c.key));
         found.push(...(await this.withPhotos(ok)));
@@ -488,8 +506,12 @@ export class Service {
         const done = finish(real.cards);
         if (done.cards.length) {
           const where = req.cuisines.length ? ` · ${req.cuisines.join(" or ")}` : mood ? ` for "${mood}"` : "";
-          const written = done.cards.slice(0, req.count).filter((c) => c.source === "ai").length;
-          const note = `Recipes from trusted sites${where}${style}${filterSuffix(req)}${written ? ` (${written} written by AI)` : ""}`;
+          const shown = done.cards.slice(0, req.count);
+          const written = shown.filter((c) => c.source === "ai").length;
+          const note =
+            written === shown.length
+              ? `AI recipes${where} (no trusted site had these dishes)${style}${filterSuffix(req)}`
+              : `Recipes from trusted sites${where}${style}${filterSuffix(req)}${written ? ` (${written} written by AI)` : ""}`;
           return { cards: done.cards.slice(0, req.count), note: note + done.suffix };
         }
       }
@@ -506,6 +528,8 @@ export class Service {
     // Without AI, the trusted sites come first (free): a typed search looks through their indexes, a
     // cuisine browses that cuisine's sites, and plain browsing draws from every site. TheMealDB is the
     // backup. (Dish types like "Beef" or "Pasta" are TheMealDB categories, so those stay with TheMealDB.)
+    // A typed search's site matches are ranked together with TheMealDB's below, best match first.
+    let siteMatches: Card[] | undefined;
     if (!aiFirst && this.deps.sites && this.deps.siteMap && !req.categories.length) {
       const siteMap = this.deps.siteMap;
       const domains = req.cuisines.length ? sitesFor(siteMap, req.cuisines) : allSites(siteMap);
@@ -522,9 +546,10 @@ export class Service {
       const cards = (await this.pictured(found.map((r) => webRecipeToCard(r, { cuisine })))).filter(
         (c) => fitsDiet(c.ingredients, dietary) && fitsMeal(c, req.meals),
       );
-      const done = finish(cards);
+      if (mood) siteMatches = cards;
+      const done = mood ? { cards: [] as Card[], suffix: "" } : finish(cards);
       if (done.cards.length) {
-        const what = mood ? `Matches for "${mood}" on trusted sites` : "Recipes from trusted sites";
+        const what = "Recipes from trusted sites";
         const where = req.cuisines.length ? ` · ${req.cuisines.join(" or ")}` : "";
         const goalsNote = goals.length ? " (nutrition goals need AI ideas, so they weren't applied)" : "";
         return { cards: done.cards.slice(0, req.count), note: `${what}${where}${filterSuffix({ ...req, goals: [] })}${goalsNote}${done.suffix}` };
@@ -561,6 +586,25 @@ export class Service {
       if (!aiAllowed || aiFirst) throw err;
       this.deps.warn?.(`TheMealDB failed: ${err instanceof Error ? err.message : String(err)}`);
     }
+    // A typed search without AI: one list from both sources, ranked by how well each dish name matches
+    // the search. Dishes that don't contain the search words are left out ("beef roll" shouldn't bring
+    // up every beef dish), unless nothing matches at all.
+    if (mood && siteMatches) {
+      const ranked = [
+        ...siteMatches.map((c, i) => ({ c, i, src: 0, s: Math.max(searchScore(mood, c.title), c.sourceUrl ? searchScore(mood, nameFromUrl(c.sourceUrl)) : 0) })),
+        ...mealDbCards.map((c, i) => ({ c, i, src: 1, s: searchScore(mood, c.title) })),
+      ]
+        .filter((x) => x.s > 0)
+        .sort((a, b) => b.s - a.s || a.src - b.src || a.i - b.i)
+        .map((x) => x.c);
+      const best = finish(ranked);
+      if (best.cards.length) {
+        const where = req.cuisines.length ? ` · ${req.cuisines.join(" or ")}` : "";
+        return { cards: best.cards.slice(0, req.count), note: `Best matches for "${mood}"${where}${filterSuffix({ ...req, goals: [] })}${best.suffix}` };
+      }
+      if (mealDbCards.length) note = `No close matches for "${mood}". ${note}`;
+    }
+
     const done = finish(mealDbCards);
     if (done.cards.length || !aiAllowed || aiFirst) return { cards: done.cards.slice(0, req.count), note: note + done.suffix };
 

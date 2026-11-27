@@ -598,8 +598,55 @@ describe("real recipes from trusted sites", () => {
     const res = await service.deck({ source: "new", ai: false, onHand: false, leniency: 2, count: 3, exclude: [], mood: "pancakes" });
     expect(calls.search).toEqual([{ query: "pancakes", domains: ["thewoksoflife.com", "seriouseats.com"] }]);
     expect(res.cards.map((c) => c.title)).toEqual(["Scallion Pancakes"]);
-    expect(res.note).toBe('Matches for "pancakes" on trusted sites');
+    expect(res.note).toBe('Best matches for "pancakes"');
     expect(calls.names).toBe(0);
+  });
+
+  it("ranks a typed search by how well dish names match, across sites and TheMealDB", async () => {
+    const pagesFor = (titles: string[]) => titles.map((t, i) => web(t, `p${i}-${t.toLowerCase().replace(/[^a-z]+/g, "-")}`));
+    const siteHits = pagesFor(["Massaman Beef Curry", "Enoki Beef Rolls", "Beef Negimaki Rolls (Scallion Beef Rolls)"]);
+    const sites = { search: async () => siteHits, random: async () => [] } as unknown as RecipeSites;
+    const m = fakeMealie();
+    const mealdb = {
+      candidates: async () => ({ refs: [{ id: "1", meal: { idMeal: "1", strMeal: "Beef Wellington", strMealThumb: "https://img.test/w.jpg", strInstructions: "Bake.", strIngredient1: "Beef", strMeasure1: "1 lb" } }], note: "Beef" }),
+      lookup: async () => null,
+    } as unknown as MealDb;
+    const service = new Service({ config, mealie: new MealieClient(config.mealieUrl, config.mealieToken, m.fetchImpl), mealdb, sites, store: new Store(":memory:"), siteMap: { General: ["a.test"] } });
+    const res = await service.deck({ source: "new", ai: false, onHand: false, leniency: 2, count: 5, exclude: [], mood: "beef roll" });
+    // Both words in the name, shortest name first; curry and Wellington don't match "roll" at all.
+    expect(res.cards.map((c) => c.title)).toEqual(["Enoki Beef Rolls", "Beef Negimaki Rolls (Scallion Beef Rolls)"]);
+    expect(res.note).toBe('Best matches for "beef roll"');
+  });
+
+  it("answers within the deck time limit even when recipe sites are slow", async () => {
+    const slowSites = {
+      find: () => new Promise((r) => setTimeout(() => r(undefined), 2_000)),
+      read: async () => null,
+    } as unknown as RecipeSites;
+    const ai = { dishNames: async () => [{ name: "Mapo Tofu", aliases: ["Mapo Tofu"], suits: ["dinner"] }], generate: async () => [] } as unknown as AiRecipes;
+    const m = fakeMealie();
+    const service = new Service({
+      config, mealie: new MealieClient(config.mealieUrl, config.mealieToken, m.fetchImpl), mealdb: fakeMealDb(), ai, sites: slowSites,
+      store: new Store(":memory:"), siteMap: { Chinese: ["slow.test"] }, limits: { matchMs: 50, deckMs: 300 },
+    });
+    const t0 = Date.now();
+    const res = await service.deck({ source: "new", onHand: false, leniency: 2, count: 4, exclude: [], cuisines: ["Chinese"] });
+    expect(Date.now() - t0).toBeLessThan(1_000);
+    expect(res.cards).toEqual([]);
+    expect(res.note).toMatch(/took too long/);
+  });
+
+  it("looks through every trusted site for a typed search with AI on and no cuisine", async () => {
+    const { service, calls } = setupReal();
+    const seen: string[][] = [];
+    // Record which sites each dish was looked up on.
+    const sites = (service as unknown as { deps: { sites: { find: (a: string[], d: string[]) => Promise<unknown> } } }).deps.sites;
+    const find = sites.find;
+    sites.find = async (a, d) => (seen.push(d), find(a, d));
+    const res = await service.deck({ source: "new", onHand: false, leniency: 2, count: 3, exclude: [], mood: "pork belly" });
+    expect(seen[0]).toEqual(["seriouseats.com", "thewoksoflife.com"]);
+    expect(res.cards.some((c) => c.source === "web")).toBe(true);
+    expect(calls.names).toBe(1);
   });
 
   it("browses every trusted site for plain browsing, without waiting on sites still being indexed", async () => {
