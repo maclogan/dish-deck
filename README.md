@@ -155,7 +155,7 @@ Every setting is documented in [`example.env`](example.env). Variables set in th
 |---|---|---|
 | `MEALIE_URL` | (required) | URL the server uses to reach Mealie |
 | `MEALIE_TOKEN` | (required) | Mealie API token |
-| `APP_PASSCODE` | (none) | Household passcode. If unset, the app is open to anyone who can reach it. |
+| `APP_PASSCODE` | (none) | Household passcode. If unset, the app is open to anyone who can reach it. Also how the app tells the household from [guests](#sharing-eat-out-with-guests). |
 | `MEALIE_PUBLIC_URL` | (none) | Public Mealie URL, for "Open in Mealie" links |
 | `TZ` | system timezone | IANA timezone that decides what "today" is, e.g. `America/Chicago` |
 | `ANTHROPIC_API_KEY` | (none) | Turns on AI ideas |
@@ -189,7 +189,23 @@ Dish Deck can write to your Mealie and spend AI credit, so treat it like Mealie 
    - **Cloudflare Tunnel:** add a public hostname, e.g. `dishes.example.com` → `http://<dish-deck address>:8080`. Then add a Cloudflare Access policy limited to your household's emails.
    - **A reverse proxy** you already run (Caddy, Traefik, nginx, Nginx Proxy Manager) with a certificate.
    - **Tailscale:** reach it privately from your phones with `tailscale serve`.
-3. **Optionally put a login in front of it** (Cloudflare Access, Authelia, Authentik). The app works behind them unchanged.
+3. **Optionally put a login in front of it** (Cloudflare Access, Authelia, Authentik). The app works behind them unchanged. With Cloudflare Access you can also let friends use the Eat out tab: see [Sharing Eat out with guests](#sharing-eat-out-with-guests).
+
+### Sharing Eat out with guests
+
+If Dish Deck is behind **Cloudflare Access** and `APP_PASSCODE` is set, people outside the household can use the **Eat out** tab without seeing or changing anything else. There's nothing to set in Dish Deck: you add and remove guests in Cloudflare.
+
+**What guests get:** only Eat out, with their own never-again list and shortlist. They can't see Discover, This week or Mealie, and the server refuses those requests (403). Each guest gets up to **60 searches a day** on your Google and AI keys; the household has no limit.
+
+**How it tells who's who:** a device with the household passcode (yours already have it saved) is the household. Anyone else Cloudflare lets in is a guest, identified by the email they signed in with. Dish Deck checks the signature on the sign-in token Cloudflare attaches to every request, and only trusts your own Cloudflare team and Access app, which it learns from your household's requests.
+
+**Set up:**
+1. In Cloudflare Zero Trust → **Access → Applications** → your Dish Deck app, add a policy named **guests** next to your household one: Action *Allow*, Include *Emails*, and list their emails. Guests can sign in with the one-time PIN Cloudflare emails them.
+2. After updating Dish Deck, open it once yourself through your Cloudflare address, so it learns which Cloudflare team to trust. Until then, guests see the passcode screen.
+
+**A new household phone** behind Cloudflare shows up as a guest at first: tap **Household? Enter passcode** under the title.
+
+**Removing a guest:** delete their email from the **guests** policy. Cloudflare keeps a sign-in valid for the application's session duration (24 hours by default), so to cut someone off immediately, also revoke their session from the users list in Zero Trust, or shorten the session duration.
 
 ## Install on your phone
 

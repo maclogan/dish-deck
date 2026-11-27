@@ -184,7 +184,12 @@ export interface ApplyRequest {
 
 export interface AppConfigResponse {
   aiEnabled: boolean;
+  /** True when the passcode screen should show (nobody is signed in yet, and a passcode is set). */
   passcodeRequired: boolean;
+  /** household: everything. guest: the Eat out tab only. none: not signed in. */
+  role: "household" | "guest" | "none";
+  /** The Cloudflare Access sign-in email, when there is one. */
+  email?: string;
   busyDays: number[];
   mealieUrl?: string;
   cuisines: string[];

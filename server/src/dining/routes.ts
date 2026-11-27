@@ -1,6 +1,6 @@
 // "Eat out" API routes (all under /api/dining/, behind the app's passcode like every other route).
 
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { CUISINE_IDS } from "./cuisines.js";
 import { PlacesError } from "./places.js";
@@ -35,6 +35,12 @@ const momentSchema = z.object({
   ai: z.boolean().default(true),
 });
 
+/** Searches a guest may run per day on the household's Google and AI keys. */
+export const GUEST_DAILY_SEARCHES = 60;
+
+/** Whose never-again list and search allowance a request uses. */
+const owner = (req: FastifyRequest) => (req.caller?.role === "guest" ? `guest:${req.caller.email}` : "household");
+
 const placeId = z.string().regex(/^[A-Za-z0-9_-]{10,300}$/);
 export const PHOTO_NAME = /^places\/[A-Za-z0-9_-]+\/photos\/[A-Za-z0-9_-]+$/;
 
@@ -53,7 +59,13 @@ export function registerDining(app: FastifyInstance, dining: DiningService | und
       return reply.code(500).send({ error: err instanceof Error ? err.message : "Unexpected error" });
     });
 
-    r.post("/search", async (req) => dining!.search(searchSchema.parse(req.body)));
+    r.post("/search", async (req, reply) => {
+      const body = searchSchema.parse(req.body);
+      if (req.caller?.role === "guest" && !dining!.takeSearch(owner(req), GUEST_DAILY_SEARCHES)) {
+        return reply.code(429).send({ error: `Daily search limit reached (${GUEST_DAILY_SEARCHES} a day). Try again tomorrow.` });
+      }
+      return dining!.search(body, owner(req));
+    });
 
     r.post("/enrich", async (req) => {
       const body = momentSchema.extend({ ids: z.array(placeId).max(40) }).parse(req.body);
@@ -66,14 +78,14 @@ export function registerDining(app: FastifyInstance, dining: DiningService | und
       dining!.chatter(placeId.parse(req.params.id), req.query.ai !== "false"),
     );
 
-    r.get("/never", async () => ({ places: dining!.never() }));
+    r.get("/never", async (req) => ({ places: dining!.never(owner(req)) }));
     r.post("/never", async (req) => {
       const body = z.object({ id: placeId, name: z.string().min(1).max(200), address: z.string().max(300).optional() }).parse(req.body);
-      dining!.addNever(body.id, body.name, body.address);
+      dining!.addNever(owner(req), body.id, body.name, body.address);
       return { ok: true };
     });
     r.delete<{ Params: { id: string } }>("/never/:id", async (req) => {
-      dining!.removeNever(placeId.parse(req.params.id));
+      dining!.removeNever(owner(req), placeId.parse(req.params.id));
       return { ok: true };
     });
 

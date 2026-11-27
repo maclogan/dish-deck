@@ -45,9 +45,6 @@ export function setPasscode(value: string) {
   passcode = value;
   storageSet(PASSCODE_KEY, value || null);
 }
-export function hasPasscode() {
-  return !!passcode;
-}
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
