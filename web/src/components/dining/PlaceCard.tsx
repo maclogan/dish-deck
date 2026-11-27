@@ -1,7 +1,7 @@
 import { useRef, useState } from "preact/hooks";
 import type { PlaceSummary } from "../../api";
 import { IconBan, IconExternal, IconGlobe, IconMore, IconStar, IconX } from "../../icons";
-import { distanceText, priceText } from "./state";
+import { distanceText } from "./state";
 
 export interface PlaceActions {
   onOpen: (p: PlaceSummary) => void;
@@ -25,10 +25,30 @@ export function PlacePhoto({ place, lazy = true }: { place: Pick<PlaceSummary, "
   return <img src={place.photo} alt="" loading={lazy ? "lazy" : undefined} draggable={false} onError={() => setFailed(true)} />;
 }
 
-/** "★ 4.6 (812) · $$ · Thai · Independent" */
+const PRICE_WORDS = ["", "Inexpensive", "Moderate", "Expensive", "Very expensive"];
+
+/** Budget at a glance: "$$" in full ink with the rest of "$$$$" dimmed, so the scale is obvious. */
+export function PriceBadge({ price }: { price?: number }) {
+  if (!price) {
+    return (
+      <span class="price-badge unknown" title="Google has no price level for this place" aria-label="Price unknown">
+        $?
+      </span>
+    );
+  }
+  return (
+    <span class="price-badge" title={PRICE_WORDS[price]} aria-label={`Price: ${PRICE_WORDS[price]}`}>
+      <span aria-hidden="true">{"$".repeat(price)}</span>
+      <span class="price-rest" aria-hidden="true">{"$".repeat(4 - price)}</span>
+    </span>
+  );
+}
+
+/** "[$$··] ★ 4.6 (812) · Thai · 0.4 mi" */
 export function MetaLine({ p }: { p: PlaceSummary }) {
   return (
     <p class="place-meta">
+      <PriceBadge price={p.price} />
       {p.rating ? (
         <span class="rating">
           ★ {p.rating.toFixed(1)}
@@ -37,9 +57,7 @@ export function MetaLine({ p }: { p: PlaceSummary }) {
       ) : (
         <span class="muted">No rating</span>
       )}
-      {p.price ? <span> · {priceText(p.price)}</span> : null}
-      {p.cuisine ? <span> · {p.cuisine}</span> : null}
-      <span> · {distanceText(p.distanceMiles)}</span>
+      <span class="meta-rest">{[p.cuisine, distanceText(p.distanceMiles)].filter(Boolean).join(" · ")}</span>
     </p>
   );
 }

@@ -432,6 +432,16 @@ main.wide .segmented { max-width: 420px; }
 .place-head .icon-btn.star.on { color: var(--amber); }
 .place-meta { margin: 0; font-size: 13px; color: var(--ink); }
 .place-meta .rating { font-weight: 700; }
+.place-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; }
+.place-meta .meta-rest { white-space: nowrap; }
+.price-badge {
+  display: inline-flex; align-items: center; padding: 1px 7px; border-radius: 7px;
+  font-size: 13px; font-weight: 800; letter-spacing: .04em; line-height: 1.5;
+  background: var(--good-bg); color: var(--good-ink);
+}
+.price-badge .price-rest { opacity: .3; }
+.price-badge.unknown { background: var(--surface-2); color: var(--ink-2); font-weight: 700; }
+.dining-deck .price-badge, .place-detail .price-badge { font-size: 15px; padding: 2px 9px; }
 .place-body .chips { gap: 4px; }
 .place-body .chip { font-size: 11px; padding: 3px 7px; }
 .chip-bad { background: color-mix(in srgb, var(--tomato) 14%, transparent); color: var(--tomato); }
