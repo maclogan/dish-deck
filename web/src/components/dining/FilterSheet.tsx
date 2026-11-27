@@ -30,6 +30,7 @@ export function FilterSheet(props: {
   filters: DiningFilters;
   sort: DiningSort;
   radius: number;
+  minRadius: number;
   maxRadius: number;
   cuisines: { id: string; label: string }[];
   aiOn: boolean;
@@ -47,7 +48,6 @@ export function FilterSheet(props: {
     }
   }, [props.open]);
   const set = <K extends keyof DiningFilters>(k: K, v: DiningFilters[K]) => setF((x) => ({ ...x, [k]: v }));
-  const radii = [0.5, 1, 3, 5, 10, props.maxRadius];
 
   return (
     <Sheet open={props.open} title="Filters" onClose={props.onClose}>
@@ -62,14 +62,26 @@ export function FilterSheet(props: {
         </ChipRow>
         {sort === "best" && !props.aiOn && <p class="filter-note">With AI off, “Best match” is Google’s own order.</p>}
 
-        <div class="filter-label">Distance</div>
-        <ChipRow>
-          {radii.map((r) => (
-            <button key={r} type="button" class={`pill ${Math.abs(radius - r) < 0.01 ? "on" : ""}`} onClick={() => setRadius(r)}>
-              {r} mi
-            </button>
-          ))}
-        </ChipRow>
+        <div class="filter-label">
+          Distance <span class="filter-hint">within {radius} mi</span>
+        </div>
+        <div class="range">
+          <input
+            type="range"
+            min={props.minRadius}
+            max={props.maxRadius}
+            step={1}
+            value={radius}
+            onInput={(e) => setRadius(Number((e.target as HTMLInputElement).value))}
+            aria-label="Distance in miles"
+            aria-valuetext={`${radius} miles`}
+            style={{ "--fill": `${((radius - props.minRadius) / (props.maxRadius - props.minRadius)) * 100}%` }}
+          />
+          <div class="range-ends" aria-hidden="true">
+            <span>{props.minRadius} mi</span>
+            <span>{props.maxRadius} mi</span>
+          </div>
+        </div>
 
         <label class="toggle">
           <input type="checkbox" checked={f.openAtTime} onChange={(e) => set("openAtTime", (e.target as HTMLInputElement).checked)} />

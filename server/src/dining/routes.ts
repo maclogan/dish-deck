@@ -4,7 +4,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { CUISINE_IDS } from "./cuisines.js";
 import { PlacesError } from "./places.js";
-import { MAX_RADIUS_MILES, type DiningService } from "./service.js";
+import { MAX_RADIUS_MILES, MIN_RADIUS_MILES, type DiningService } from "./service.js";
 
 const latLng = z.object({ lat: z.number().min(-90).max(90), lng: z.number().min(-180).max(180) });
 const clock = z.string().regex(/^\d{1,2}:\d{2}$/);
@@ -21,7 +21,7 @@ const filtersSchema = z.object({
 
 const searchSchema = z.object({
   location: latLng,
-  radiusMiles: z.number().min(0.25).max(MAX_RADIUS_MILES),
+  radiusMiles: z.number().min(MIN_RADIUS_MILES).max(MAX_RADIUS_MILES),
   when: clock.optional(),
   query: z.string().max(300).optional(),
   filters: filtersSchema.default({ prices: [], cuisines: [], chain: "any", openAtTime: true, service: [], features: [] }),

@@ -40,9 +40,10 @@ const TARGET = 20;
 /** ...or it has made this many Google requests (more only when several cuisines are picked). */
 const MAX_REQUESTS = 3;
 
-/** Searches start at 3 miles; Filters can widen them up to 25. Distances are in miles. */
-export const DEFAULT_RADIUS_MILES = 3;
-export const MAX_RADIUS_MILES = 25;
+/** Searches cover 25 miles to start; the Filters slider goes from 1 to 100. Distances are in miles. */
+export const DEFAULT_RADIUS_MILES = 25;
+export const MIN_RADIUS_MILES = 1;
+export const MAX_RADIUS_MILES = 100;
 /** Where to search when a phone won't share its location. */
 export const DEFAULT_LOCATION = { label: "Denver, CO", lat: 39.7392, lng: -104.9903 };
 
@@ -283,6 +284,7 @@ export class DiningService {
       mapsBrowserKey: this.d.mapsBrowserKey,
       chatter: !!this.d.chatter,
       radiusMiles: DEFAULT_RADIUS_MILES,
+      minRadiusMiles: MIN_RADIUS_MILES,
       maxRadiusMiles: MAX_RADIUS_MILES,
       defaultLocation: DEFAULT_LOCATION,
       cuisines: CUISINES,

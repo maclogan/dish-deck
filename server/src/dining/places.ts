@@ -98,8 +98,6 @@ export class PlacesError extends Error {
   }
 }
 
-const METERS_PER_MILE = 1609.344;
-export const milesToMeters = (mi: number) => Math.min(50_000, Math.max(100, mi * METERS_PER_MILE));
 
 /** The box around a circle, as Google's {low, high} rectangle. */
 export function boundingBox(center: LatLng, radiusMiles: number) {
