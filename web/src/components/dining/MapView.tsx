@@ -77,7 +77,15 @@ function loadMaps(key: string): Promise<void> {
   return window.__dishdeckMaps;
 }
 
-const css = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const MAP_ID = "DEMO_MAP_ID";
+
+/** A marker's look: a styled element (see .map-pin / .map-you in styles.css). */
+function dot(cls: string, label?: string): HTMLElement {
+  const d = document.createElement("div");
+  d.className = cls;
+  if (label) d.textContent = label;
+  return d;
+}
 
 export function MapView(props: { apiKey: string; center: LatLng; places: PlaceSummary[]; actions: PlaceActions }) {
   const el = useRef<HTMLDivElement>(null);
@@ -99,36 +107,33 @@ export function MapView(props: { apiKey: string; center: LatLng; places: PlaceSu
     (async () => {
       await loadMaps(props.apiKey);
       const g = window.google.maps;
-      const [{ Map }, { Marker }, core] = await Promise.all([g.importLibrary("maps"), g.importLibrary("marker"), g.importLibrary("core")]);
+      const [{ Map }, { AdvancedMarkerElement }, core] = await Promise.all([g.importLibrary("maps"), g.importLibrary("marker"), g.importLibrary("core")]);
       if (!live || !el.current) return;
       map.current ??= new Map(el.current, {
         center: props.center,
         zoom: 14,
+        // Advanced markers need a map ID; Google's demo ID works without any setup in Cloud.
+        mapId: MAP_ID,
         disableDefaultUI: true,
         zoomControl: true,
         clickableIcons: false,
         colorScheme: matchMedia("(prefers-color-scheme: dark)").matches ? "DARK" : "LIGHT",
       });
-      markers.current.forEach((m) => m.setMap(null));
+      markers.current.forEach((m) => (m.map = null));
       const bounds = new core.LatLngBounds();
       bounds.extend(props.center);
-      const you = new Marker({
-        map: map.current,
-        position: props.center,
-        icon: { path: core.SymbolPath.CIRCLE, scale: 7, fillColor: "#3b82f6", fillOpacity: 1, strokeColor: "#fff", strokeWeight: 2 },
-        title: "You",
-      });
+      const you = new AdvancedMarkerElement({ map: map.current, position: props.center, content: dot("map-you"), title: "You are here" });
       markers.current = [
         you,
         ...props.places.map((p, i) => {
-          const m = new Marker({
+          const m = new AdvancedMarkerElement({
             map: map.current,
             position: p.location,
-            label: { text: String(i + 1), color: "#fff", fontWeight: "700", fontSize: "12px" },
-            icon: { path: core.SymbolPath.CIRCLE, scale: 13, fillColor: css("--tomato") || "#e4572e", fillOpacity: 1, strokeColor: "#fff", strokeWeight: 2 },
-            title: p.name,
+            content: dot("map-pin", String(i + 1)),
+            title: `${i + 1}. ${p.name}`,
+            gmpClickable: true,
           });
-          m.addListener("click", () => {
+          m.addEventListener("gmp-click", () => {
             setFocus(p.id);
             listRef.current?.querySelector(`[data-id="${p.id}"]`)?.scrollIntoView({ behavior: "smooth", block: "nearest" });
           });
@@ -159,6 +164,7 @@ export function MapView(props: { apiKey: string; center: LatLng; places: PlaceSu
             <PlaceCard p={p} index={i} actions={props.actions} />
           </div>
         ))}
+        <p class="hint">Tap a pin to jump to its place. Swipe a place left to hide it for today.</p>
       </div>
     </div>
   );

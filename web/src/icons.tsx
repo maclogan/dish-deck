@@ -62,15 +62,6 @@ export const IconLocate = ({ size, ...p }: P) => (
 export const IconMore = ({ size, ...p }: P) => (
   <svg {...base(size)} {...p}><circle cx="5" cy="12" r="1.2" /><circle cx="12" cy="12" r="1.2" /><circle cx="19" cy="12" r="1.2" /></svg>
 );
-export const IconList = ({ size, ...p }: P) => (
-  <svg {...base(size)} {...p}><path d="M9 6h12M9 12h12M9 18h12M4 6h.01M4 12h.01M4 18h.01" /></svg>
-);
-export const IconCards = ({ size, ...p }: P) => (
-  <svg {...base(size)} {...p}><rect x="6" y="3" width="12" height="16" rx="2" /><path d="M3 7v12a2 2 0 0 0 2 2h10" /></svg>
-);
-export const IconMap = ({ size, ...p }: P) => (
-  <svg {...base(size)} {...p}><path d="m9 4-6 2v14l6-2 6 2 6-2V4l-6 2-6-2ZM9 4v14M15 6v14" /></svg>
-);
 export const IconPhone = ({ size, ...p }: P) => (
   <svg {...base(size)} {...p}><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 1.9.7 2.8a2 2 0 0 1-.5 2.1L8 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.8.7a2 2 0 0 1 1.7 2Z" /></svg>
 );

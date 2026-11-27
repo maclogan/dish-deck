@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { api, storageGet, storageSet, type AppConfigResponse, type DiningFilters, type DiningSort, type Moment, type PlaceSummary } from "../../api";
-import { IconBan, IconCards, IconList, IconMap, IconRefresh, IconSearch, IconSliders, IconSparkle, IconStar } from "../../icons";
+import { IconBan, IconRefresh, IconSearch, IconSliders, IconSparkle, IconStar } from "../../icons";
 import { Compare } from "./Compare";
-import { DiningDeck } from "./DiningDeck";
 import { FilterSheet, SORTS } from "./FilterSheet";
 import { LocationBar, currentPosition } from "./LocationBar";
 import { MapView } from "./MapView";
@@ -10,8 +9,8 @@ import { NeverSheet } from "./NeverSheet";
 import { PlaceCard, type PlaceActions } from "./PlaceCard";
 import { PlaceSheet } from "./PlaceSheet";
 import {
-  countFilters, loadDisplay, loadFilters, loadLocation, loadSort, loadToday, saveDisplay, saveFilters, saveLocation, saveSort, saveToday,
-  type Display, type SavedLocation, type Today,
+  countFilters, loadFilters, loadLocation, loadSort, loadToday, saveFilters, saveLocation, saveSort, saveToday,
+  type SavedLocation, type Today,
 } from "./state";
 
 interface Undo {
@@ -33,10 +32,6 @@ export function EatOut(props: { config: AppConfigResponse; aiOn: boolean; notify
   const [radius, setRadius] = useState(() => {
     const saved = Number(storageGet("dishdeck.dining.miles"));
     return saved ? Math.min(dc.maxRadiusMiles, Math.max(dc.minRadiusMiles, saved)) : dc.radiusMiles;
-  });
-  const [display, setDisplay] = useState<Display>(() => {
-    const d = loadDisplay();
-    return d === "map" && !dc.mapsBrowserKey ? "list" : d;
   });
   const [places, setPlaces] = useState<PlaceSummary[]>([]);
   const [note, setNote] = useState<string | undefined>();
@@ -72,8 +67,11 @@ export function EatOut(props: { config: AppConfigResponse; aiOn: boolean; notify
   const useGps = (quiet = false) => {
     setLocating(true);
     currentPosition()
-      .then((ll) => {
-        const l = { label: "Current location", ...ll, gps: true };
+      .then(({ accuracy, ...ll }) => {
+        // Say so when the phone could only give a rough position (no GPS fix yet, or precise location off).
+        const miles = accuracy / 1609;
+        const label = miles >= 0.5 ? `Current location (within ${miles < 10 ? miles.toFixed(1) : Math.round(miles)} mi)` : "Current location";
+        const l = { label, ...ll, gps: true };
         setLocation(l);
         saveLocation(l);
       })
@@ -151,10 +149,6 @@ export function EatOut(props: { config: AppConfigResponse; aiOn: boolean; notify
 
   const visible = places.filter((p) => !today.hidden.includes(p.id));
   const filterCount = countFilters(filters) + (sort !== "best" ? 1 : 0);
-  const pickDisplay = (d: Display) => {
-    setDisplay(d);
-    saveDisplay(d);
-  };
 
   const submit = (e: Event) => {
     e.preventDefault();
@@ -196,22 +190,6 @@ export function EatOut(props: { config: AppConfigResponse; aiOn: boolean; notify
       </form>
 
       <div class="eat-bar">
-        <div class="view-toggle" role="radiogroup" aria-label="Display">
-          {([
-            ["list", "List", IconList],
-            ["deck", "Deck", IconCards],
-            ...(dc.mapsBrowserKey ? [["map", "Map", IconMap] as const] : []),
-          ] as const).map(([id, label, Icon]) => (
-            <button key={id} type="button" role="radio" aria-checked={display === id} class={display === id ? "on" : ""} onClick={() => pickDisplay(id)}>
-              <Icon size={16} /> {label}
-            </button>
-          ))}
-        </div>
-        {display === "deck" && today.shortlist.length > 0 && (
-          <button type="button" class="shortlist-bar inline" onClick={() => setCompareOpen(true)}>
-            <IconStar size={14} filled /> {today.shortlist.length} · Compare
-          </button>
-        )}
         <span class="eat-count">
           {loading ? "Searching…" : `${visible.length} place${visible.length === 1 ? "" : "s"}`} · {SORTS.find((s) => s.id === sort)?.label}
         </span>
@@ -250,9 +228,7 @@ export function EatOut(props: { config: AppConfigResponse; aiOn: boolean; notify
               <p>You've hidden everything in this search for today.</p>
               <button class="btn" onClick={() => setToday((t) => ({ ...t, hidden: [] }))}>Show them again</button>
             </div>
-          ) : display === "deck" ? (
-            <DiningDeck places={visible} actions={actions} />
-          ) : display === "map" && dc.mapsBrowserKey ? (
+          ) : dc.mapsBrowserKey ? (
             <MapView apiKey={dc.mapsBrowserKey} center={location} places={visible} actions={actions} />
           ) : (
             <div class="place-list">
@@ -282,7 +258,7 @@ export function EatOut(props: { config: AppConfigResponse; aiOn: boolean; notify
         )}
       </div>
 
-      {display !== "deck" && today.shortlist.length > 0 && (
+      {today.shortlist.length > 0 && (
         <button type="button" class="shortlist-bar" onClick={() => setCompareOpen(true)}>
           <IconStar size={18} filled /> Shortlist ({today.shortlist.length}) · Compare
         </button>

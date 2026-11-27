@@ -7,6 +7,7 @@ const DISMISS_SPEED = 0.6;
 const CLOSE_MS = 200;
 
 interface Drag {
+  startX: number;
   startY: number;
   lastY: number;
   lastT: number;
@@ -66,19 +67,24 @@ export function Sheet(props: { open: boolean; title?: string; onClose: () => voi
   }, [props.open, closing]);
 
   // ---- drag handling, shared by touch and mouse
-  const start = (y: number, target: EventTarget | null, pointerId?: number) => {
+  const start = (x: number, y: number, target: EventTarget | null, pointerId?: number) => {
     if (closing) return;
     const inBody = !!(target instanceof Node && bodyRef.current?.contains(target));
-    drag.current = { startY: y, lastY: y, lastT: performance.now(), speed: 0, active: false, inBody, pointerId };
+    drag.current = { startX: x, startY: y, lastY: y, lastT: performance.now(), speed: 0, active: false, inBody, pointerId };
   };
 
   /** Returns true while the sheet is following the finger (so the caller blocks scrolling). */
-  const move = (y: number): boolean => {
+  const move = (x: number, y: number): boolean => {
     const d = drag.current;
     if (!d) return false;
     const dy = y - d.startY;
     if (!d.active) {
-      if (Math.abs(dy) < 6) return false;
+      if (Math.abs(dy) < 6 && Math.abs(x - d.startX) < 6) return false;
+      // Mostly sideways: a photo strip or chip row is scrolling, so leave the sheet where it is.
+      if (Math.abs(x - d.startX) > Math.abs(dy)) {
+        drag.current = null;
+        return false;
+      }
       // Pulling down from the top of the content (or from the header) drags the sheet; anything else scrolls.
       const atTop = (bodyRef.current?.scrollTop ?? 0) <= 0;
       if (dy > 0 && (!d.inBody || atTop)) {
@@ -116,10 +122,10 @@ export function Sheet(props: { open: boolean; title?: string; onClose: () => voi
   useEffect(() => {
     const sheet = sheetRef.current;
     if (!props.open || !sheet) return;
-    const onStart = (e: TouchEvent) => e.touches.length === 1 && start(e.touches[0]!.clientY, e.target);
+    const onStart = (e: TouchEvent) => e.touches.length === 1 && start(e.touches[0]!.clientX, e.touches[0]!.clientY, e.target);
     const onMove = (e: TouchEvent) => {
       if (e.touches.length !== 1) return;
-      if (move(e.touches[0]!.clientY) && e.cancelable) e.preventDefault();
+      if (move(e.touches[0]!.clientX, e.touches[0]!.clientY) && e.cancelable) e.preventDefault();
     };
     // Swipes on the dimmed backdrop shouldn't scroll (or refresh) the page underneath.
     const backdrop = backdropRef.current;
@@ -141,13 +147,13 @@ export function Sheet(props: { open: boolean; title?: string; onClose: () => voi
   // Mouse: drag by the handle or title (the content scrolls with the wheel instead).
   const onPointerDown = (e: PointerEvent) => {
     if (e.pointerType !== "mouse" || e.button !== 0) return;
-    start(e.clientY, null, e.pointerId);
+    start(e.clientX, e.clientY, null, e.pointerId);
   };
   const onPointerMove = (e: PointerEvent) => {
     if (e.pointerType !== "mouse" || drag.current?.pointerId !== e.pointerId) return;
     const el = e.currentTarget as HTMLElement;
     // Capture only once it's really a drag, so a plain click on the handle still reaches it.
-    if (move(e.clientY) && !el.hasPointerCapture(e.pointerId)) el.setPointerCapture(e.pointerId);
+    if (move(e.clientX, e.clientY) && !el.hasPointerCapture(e.pointerId)) el.setPointerCapture(e.pointerId);
   };
   const onPointerUp = (e: PointerEvent) => {
     if (e.pointerType === "mouse" && drag.current?.pointerId === e.pointerId) end();
