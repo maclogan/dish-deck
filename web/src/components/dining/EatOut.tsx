@@ -29,7 +29,11 @@ export function EatOut(props: { config: AppConfigResponse; aiOn: boolean; notify
   const [submitted, setSubmitted] = useState("");
   const [filters, setFilters] = useState<DiningFilters>(loadFilters);
   const [sort, setSort] = useState<DiningSort>(loadSort);
-  const [radius, setRadius] = useState(() => Math.min(dc.maxRadiusMiles, Number(storageGet("dishdeck.dining.radius")) || dc.radiusMiles));
+  // A new storage key, so phones that saved the old 3-mile default start at the new one.
+  const [radius, setRadius] = useState(() => {
+    const saved = Number(storageGet("dishdeck.dining.miles"));
+    return saved ? Math.min(dc.maxRadiusMiles, Math.max(dc.minRadiusMiles, saved)) : dc.radiusMiles;
+  });
   const [display, setDisplay] = useState<Display>(() => {
     const d = loadDisplay();
     return d === "map" && !dc.mapsBrowserKey ? "list" : d;
@@ -289,6 +293,7 @@ export function EatOut(props: { config: AppConfigResponse; aiOn: boolean; notify
         filters={filters}
         sort={sort}
         radius={radius}
+        minRadius={dc.minRadiusMiles}
         maxRadius={dc.maxRadiusMiles}
        
         cuisines={dc.cuisines}
@@ -300,7 +305,7 @@ export function EatOut(props: { config: AppConfigResponse; aiOn: boolean; notify
           setSort(s);
           saveSort(s);
           setRadius(r);
-          storageSet("dishdeck.dining.radius", String(r));
+          storageSet("dishdeck.dining.miles", String(r));
           setShowFilters(false);
         }}
       />

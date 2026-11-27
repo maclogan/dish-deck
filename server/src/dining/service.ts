@@ -34,11 +34,16 @@ const MEMORY_TTL = HOUR;
 const ENRICH_TTL = 7 * DAY;
 const PLAN_TTL = 30 * DAY;
 const CHATTER_TTL = 7 * DAY;
-const MAX_RESULTS = 40;
+const MAX_RESULTS = 60;
+/** A search keeps fetching pages until this many places are left after the filters... */
+const TARGET = 20;
+/** ...or it has made this many Google requests (more only when several cuisines are picked). */
+const MAX_REQUESTS = 3;
 
-/** Searches start at 3 miles; Filters can widen them up to 25. Distances are in miles. */
-export const DEFAULT_RADIUS_MILES = 3;
-export const MAX_RADIUS_MILES = 25;
+/** Searches cover 25 miles to start; the Filters slider goes from 1 to 100. Distances are in miles. */
+export const DEFAULT_RADIUS_MILES = 25;
+export const MIN_RADIUS_MILES = 1;
+export const MAX_RADIUS_MILES = 100;
 /** Where to search when a phone won't share its location. */
 export const DEFAULT_LOCATION = { label: "Denver, CO", lat: 39.7392, lng: -104.9903 };
 
@@ -279,10 +284,25 @@ export class DiningService {
       mapsBrowserKey: this.d.mapsBrowserKey,
       chatter: !!this.d.chatter,
       radiusMiles: DEFAULT_RADIUS_MILES,
+      minRadiusMiles: MIN_RADIUS_MILES,
       maxRadiusMiles: MAX_RADIUS_MILES,
       defaultLocation: DEFAULT_LOCATION,
       cuisines: CUISINES,
     };
+  }
+
+  /** Places from these results that are open for business, in the circle, not never-again, and pass the filters. */
+  private async candidates(raw: GPlace[], req: DiningSearchRequest, never: Set<string>, moment: Moment, filters: DiningFilters) {
+    const seen = new Set<string>();
+    const places = raw.filter((p) => {
+      if (seen.has(p.id) || never.has(p.id) || !p.location) return false;
+      seen.add(p.id);
+      if (p.businessStatus && p.businessStatus !== "OPERATIONAL") return false;
+      // The search box's corners reach a little past the circle.
+      return distanceMiles(req.location, { lat: p.location.latitude, lng: p.location.longitude }) <= req.radiusMiles * 1.05;
+    });
+    const chains = await detectChains(places.map((p) => ({ id: p.id, name: p.displayName?.text ?? "", types: p.types ?? [], country: country(p) })));
+    return places.map((p) => ({ p, s: this.summarize(p, moment, chains.has(p.id)) })).filter(({ p, s }) => this.passes(s, p, filters));
   }
 
   async search(req: DiningSearchRequest): Promise<DiningSearchResponse> {
@@ -302,38 +322,47 @@ export class DiningService {
     }
     const filters = mergePlan(req.filters, plan);
 
-    const raw = query
-      ? await this.d.places.text({
-          query: plan?.textQuery ?? query,
+    // What to ask Google: the typed search, one search per picked cuisine (up to 4), or "restaurants".
+    // Google applies rating, price, type and open-now itself, so pages aren't wasted on places the
+    // filters would drop; more pages are fetched while fewer than TARGET places are left.
+    const labels = new Map(CUISINES.map((c) => [c.id, c.label]));
+    const queries: { q: string; type?: string }[] = query
+      ? [{ q: plan?.textQuery ?? query }]
+      : filters.cuisines.length
+        ? filters.cuisines.slice(0, 4).map((id) => ({ q: `${labels.get(id) ?? "food"} restaurant`, type: id }))
+        : [{ q: "restaurants", type: "restaurant" }];
+    const cursors = queries.map((q) => ({ ...q, next: undefined as string | undefined, done: false, started: false }));
+    const never = this.d.store.neverIds();
+    const moment: Moment = { location: req.location, when: req.when, ai: useAi };
+    const raw: GPlace[] = [];
+    let list: { p: GPlace; s: PlaceSummary }[] = [];
+    let requests = 0;
+    const maxRequests = Math.max(MAX_REQUESTS, queries.length);
+    while (requests < maxRequests) {
+      const active = cursors.filter((c) => !c.done);
+      if (!active.length) break;
+      if (requests >= queries.length && list.length >= TARGET) break;
+      for (const c of active) {
+        if (requests >= maxRequests) break;
+        const page = await this.d.places.textPage({
+          query: c.q,
+          type: c.type,
           center: req.location,
           radiusMiles: req.radiusMiles,
           minRating: filters.minRating,
           prices: filters.prices,
           openNow: filters.openAtTime && !req.when,
-          pages: 2,
-        })
-      : await this.d.places.nearby({
-          center: req.location,
-          radiusMiles: req.radiusMiles,
-          types: filters.cuisines.length ? filters.cuisines : ["restaurant"],
-          rank: req.sort === "distance" ? "DISTANCE" : "POPULARITY",
+          rank: req.sort === "distance" ? "DISTANCE" : "RELEVANCE",
+          pageToken: c.next,
         });
+        requests++;
+        raw.push(...page.places);
+        c.next = page.next;
+        c.done = !page.next;
+      }
+      list = await this.candidates(raw, req, never, moment, filters);
+    }
     this.remember(raw);
-
-    const never = this.d.store.neverIds();
-    const seen = new Set<string>();
-    const candidates = raw.filter((p) => {
-      if (seen.has(p.id) || never.has(p.id) || !p.location) return false;
-      seen.add(p.id);
-      if (p.businessStatus && p.businessStatus !== "OPERATIONAL") return false;
-      // Text search is only biased toward the circle, so trim what's well outside it.
-      return distanceMiles(req.location, { lat: p.location.latitude, lng: p.location.longitude }) <= req.radiusMiles * 1.15;
-    });
-    const chains = await detectChains(candidates.map((p) => ({ id: p.id, name: p.displayName?.text ?? "", types: p.types ?? [], country: country(p) })));
-    const moment: Moment = { location: req.location, when: req.when, ai: useAi };
-    let list = candidates
-      .map((p) => ({ p, s: this.summarize(p, moment, chains.has(p.id)) }))
-      .filter(({ p, s }) => this.passes(s, p, filters));
 
     // AI reranks a typed search by reading the reviews.
     let scores: Map<string, { score: number; why: string }> | undefined;

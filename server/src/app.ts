@@ -21,7 +21,7 @@ import { AiDining } from "./dining/ai.js";
 import { Chatter } from "./dining/chatter.js";
 import { PlacesClient } from "./dining/places.js";
 import { registerDining } from "./dining/routes.js";
-import { DEFAULT_LOCATION, DEFAULT_RADIUS_MILES, DiningService, MAX_RADIUS_MILES } from "./dining/service.js";
+import { DEFAULT_LOCATION, DEFAULT_RADIUS_MILES, DiningService, MAX_RADIUS_MILES, MIN_RADIUS_MILES } from "./dining/service.js";
 import type { AppConfigResponse } from "./types.js";
 
 const mealType = z.enum(["lunch", "dinner"]);
@@ -280,6 +280,7 @@ export function buildApp(
         enabled: false,
         chatter: false,
         radiusMiles: DEFAULT_RADIUS_MILES,
+        minRadiusMiles: MIN_RADIUS_MILES,
         maxRadiusMiles: MAX_RADIUS_MILES,
         defaultLocation: DEFAULT_LOCATION,
         cuisines: [],

@@ -129,16 +129,22 @@ function gplace(n: number, extra: Partial<GPlace> = {}): GPlace {
   };
 }
 
-function fakeGoogle(places: GPlace[]) {
+/** A fake Places API. Pass pages (arrays of places) to test paging; a flat list is one page. */
+function fakeGoogle(places: GPlace[] | GPlace[][]) {
+  const pages = (Array.isArray(places[0]) ? places : [places]) as GPlace[][];
+  const all = pages.flat();
   const calls: { path: string; body?: any; mask?: string }[] = [];
   const fetchImpl = (async (input: URL | RequestInfo, init?: RequestInit) => {
     const url = new URL(String(input));
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
     calls.push({ path: url.pathname, body, mask: (init?.headers as Record<string, string> | undefined)?.["X-Goog-FieldMask"] });
     const json = (b: unknown) => new Response(JSON.stringify(b), { headers: { "Content-Type": "application/json" } });
-    if (url.pathname.endsWith(":searchNearby") || url.pathname.endsWith(":searchText")) return json({ places });
+    if (url.pathname.endsWith(":searchText")) {
+      const n = body.pageToken ? Number(body.pageToken) : 0;
+      return json({ places: pages[n] ?? [], ...(n + 1 < pages.length ? { nextPageToken: String(n + 1) } : {}) });
+    }
     const id = url.pathname.split("/").pop();
-    const p = places.find((x) => x.id === id);
+    const p = all.find((x) => x.id === id);
     return p ? json(p) : new Response(JSON.stringify({ error: { message: "nope" } }), { status: 404 });
   }) as typeof fetch;
   return { client: new PlacesClient("key", "https://places.test", fetchImpl), calls };
@@ -167,7 +173,7 @@ function fakeAi() {
   return { ai, calls };
 }
 
-function service(places: GPlace[], withAi = true) {
+function service(places: GPlace[] | GPlace[][], withAi = true) {
   const google = fakeGoogle(places);
   const ai = fakeAi();
   const store = new Store(":memory:");
@@ -183,13 +189,16 @@ function service(places: GPlace[], withAi = true) {
 }
 
 describe("DiningService", () => {
-  it("searches nearby, removes never-again places, and never uses likes", async () => {
+  it("searches restaurants in the circle's box, removes never-again places, and never uses likes", async () => {
     const { svc, store, google } = service([gplace(1), gplace(2), gplace(3)]);
     store.addNever("place000002", "Place 2");
     const r = await svc.search({ location: HERE, radiusMiles: 3, filters: NOFILTER, sort: "best", ai: false });
     expect(r.places.map((p) => p.name)).toEqual(["Place 1", "Place 3"]);
-    expect(google.calls[0]!.path).toBe("/v1/places:searchNearby");
-    expect(google.calls[0]!.body.includedTypes).toEqual(["restaurant"]);
+    expect(google.calls[0]!.path).toBe("/v1/places:searchText");
+    expect(google.calls[0]!.body).toMatchObject({ textQuery: "restaurants", includedType: "restaurant", pageSize: 20 });
+    const box = google.calls[0]!.body.locationRestriction.rectangle;
+    expect(box.low.latitude).toBeCloseTo(HERE.lat - 3 / 69, 3);
+    expect(box.high.longitude).toBeGreaterThan(HERE.lng);
     // One request returns everything the list needs (reviews included), so the place sheet needs no extra call.
     expect(google.calls[0]!.mask).toContain("places.reviews");
     const d = await svc.details("place000001", { location: HERE, ai: false });
@@ -249,6 +258,32 @@ describe("DiningService", () => {
     expect(google.calls.at(-1)!.body.textQuery).toBe("cozy hole-in-the-wall thai");
   });
 
+  it("lets Google apply rating, price and open-now, and searches each picked cuisine", async () => {
+    const { svc, google } = service([gplace(1)]);
+    await svc.search({ location: HERE, radiusMiles: 3, filters: { ...NOFILTER, minRating: 4, prices: [1, 2], openAtTime: true }, sort: "distance", ai: false });
+    expect(google.calls[0]!.body).toMatchObject({ minRating: 4, priceLevels: ["PRICE_LEVEL_INEXPENSIVE", "PRICE_LEVEL_MODERATE"], openNow: true, rankPreference: "DISTANCE" });
+    google.calls.length = 0;
+    await svc.search({ location: HERE, radiusMiles: 3, when: "19:00", filters: { ...NOFILTER, cuisines: ["thai_restaurant", "pizza_restaurant"], openAtTime: true }, sort: "best", ai: false });
+    expect(google.calls.map((c) => [c.body.textQuery, c.body.includedType, c.body.openNow])).toEqual([
+      ["Thai restaurant", "thai_restaurant", undefined],
+      ["Pizza restaurant", "pizza_restaurant", undefined],
+    ]);
+  });
+
+  it("fetches more pages while too few places pass the filters, up to 3 requests", async () => {
+    const closedAt7 = { periods: Array.from({ length: 7 }, (_, d) => ({ open: { day: d, hour: 8 }, close: { day: d, hour: 15 } })), weekdayDescriptions: [] };
+    const page = (from: number, openCount: number) =>
+      Array.from({ length: 20 }, (_, i) => gplace(from + i, i < openCount ? { location: { latitude: HERE.lat, longitude: HERE.lng } } : { regularOpeningHours: closedAt7, location: { latitude: HERE.lat, longitude: HERE.lng } }));
+    const { svc, google } = service([page(100, 5), page(200, 5), page(300, 5), page(400, 5)]);
+    const r = await svc.search({ location: HERE, radiusMiles: 3, when: "19:00", filters: { ...NOFILTER, openAtTime: true }, sort: "best", ai: false });
+    expect(google.calls).toHaveLength(3);
+    expect(r.places).toHaveLength(15);
+    // Enough left after the first page: no more requests.
+    const many = service([page(500, 20), page(600, 20)]);
+    await many.svc.search({ location: HERE, radiusMiles: 3, when: "19:00", filters: { ...NOFILTER, openAtTime: true }, sort: "best", ai: false });
+    expect(many.google.calls).toHaveLength(1);
+  });
+
   it("drops closed businesses and places far outside the circle", async () => {
     const { svc } = service([gplace(1, { businessStatus: "CLOSED_PERMANENTLY" }), gplace(2, { location: { latitude: 42.5, longitude: -87.63 } }), gplace(3)]);
     const r = await svc.search({ location: HERE, radiusMiles: 3, query: "thai", filters: NOFILTER, sort: "best", ai: false });
@@ -292,7 +327,8 @@ describe("dining routes", () => {
     const h = { "x-app-passcode": "secret" };
     expect((await app.inject({ method: "GET", url: "/api/dining/never" })).statusCode).toBe(401);
     expect((await app.inject({ method: "POST", url: "/api/dining/search", headers: h, payload: { location: { lat: 999, lng: 0 }, radiusMiles: 3 } })).statusCode).toBe(400);
-    expect((await app.inject({ method: "POST", url: "/api/dining/search", headers: h, payload: { location: HERE, radiusMiles: 30 } })).statusCode).toBe(400);
+    expect((await app.inject({ method: "POST", url: "/api/dining/search", headers: h, payload: { location: HERE, radiusMiles: 101 } })).statusCode).toBe(400);
+    expect((await app.inject({ method: "POST", url: "/api/dining/search", headers: h, payload: { location: HERE, radiusMiles: 0.5 } })).statusCode).toBe(400);
 
     await app.inject({ method: "POST", url: "/api/dining/never", headers: h, payload: { id: "place000001", name: "Place 1" } });
     const list = (await app.inject({ method: "GET", url: "/api/dining/never", headers: h })).json();
@@ -317,7 +353,7 @@ describe("dining routes", () => {
     const { svc } = service([], false);
     const app = buildApp(config, { store: new Store(":memory:"), dining: svc });
     const c = (await app.inject({ method: "GET", url: "/api/config" })).json();
-    expect(c.dining).toMatchObject({ enabled: true, radiusMiles: 3, maxRadiusMiles: 25, defaultLocation: { label: "Denver, CO" } });
+    expect(c.dining).toMatchObject({ enabled: true, radiusMiles: 25, minRadiusMiles: 1, maxRadiusMiles: 100, defaultLocation: { label: "Denver, CO" } });
     expect(c.dining.cuisines.length).toBeGreaterThan(20);
   });
 });
