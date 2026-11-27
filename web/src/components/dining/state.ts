@@ -73,11 +73,7 @@ export function countFilters(f: DiningFilters, defaultOpen = true): number {
   );
 }
 
-/** Distance in the household's units. */
-export function distanceText(miles: number, units: "mi" | "km"): string {
-  const v = units === "km" ? miles * 1.609 : miles;
-  return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${units}`;
-}
+export const distanceText = (miles: number) => `${miles < 10 ? miles.toFixed(1) : Math.round(miles)} mi`;
 
 export const priceText = (p?: number) => (p ? "$".repeat(p) : "");
 

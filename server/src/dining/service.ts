@@ -36,15 +36,18 @@ const PLAN_TTL = 30 * DAY;
 const CHATTER_TTL = 7 * DAY;
 const MAX_RESULTS = 40;
 
+/** Searches start at 3 miles; Filters can widen them up to 25. Distances are in miles. */
+export const DEFAULT_RADIUS_MILES = 3;
+export const MAX_RADIUS_MILES = 25;
+/** Where to search when a phone won't share its location. */
+export const DEFAULT_LOCATION = { label: "Denver, CO", lat: 39.7392, lng: -104.9903 };
+
 export interface DiningDeps {
   places: PlacesClient;
   store: Store;
   ai?: AiDining;
   chatter?: Chatter;
   timezone: string;
-  radiusMiles: number;
-  units: "mi" | "km";
-  defaultLocation?: string;
   mapsBrowserKey?: string;
   /** Signs photo URLs (img tags can't send the passcode header). */
   photoUrl: (name: string, width: number) => string;
@@ -147,7 +150,6 @@ export function mergePlan(filters: DiningFilters, plan: QueryPlan | undefined): 
 export class DiningService {
   private memory = new Map<string, { place: GPlace; at: number }>();
   private inflight = new Map<string, Promise<void>>();
-  private defaultLoc?: Promise<({ label: string } & LatLng) | undefined>;
 
   constructor(private d: DiningDeps) {}
 
@@ -276,32 +278,11 @@ export class DiningService {
       enabled,
       mapsBrowserKey: this.d.mapsBrowserKey,
       chatter: !!this.d.chatter,
-      radiusMiles: this.d.radiusMiles,
-      units: this.d.units,
+      radiusMiles: DEFAULT_RADIUS_MILES,
+      maxRadiusMiles: MAX_RADIUS_MILES,
+      defaultLocation: DEFAULT_LOCATION,
       cuisines: CUISINES,
     };
-  }
-
-  /** DINING_DEFAULT_LOCATION as a point (looked up once, then cached). */
-  async defaultLocation(): Promise<({ label: string } & LatLng) | undefined> {
-    const text = this.d.defaultLocation;
-    if (!text) return undefined;
-    const key = `defloc:${text}`;
-    const cached = this.d.store.diningGet<{ label: string } & LatLng>(key, 30 * DAY);
-    if (cached) return cached;
-    this.defaultLoc ??= this.d.places
-      .geocode(text)
-      .then((loc) => {
-        if (loc) this.d.store.diningPut(key, loc);
-        else this.d.warn(`DINING_DEFAULT_LOCATION "${text}" wasn't found by Google`);
-        return loc;
-      })
-      .catch((err) => {
-        this.d.warn(`Couldn't look up DINING_DEFAULT_LOCATION: ${err instanceof Error ? err.message : err}`);
-        this.defaultLoc = undefined;
-        return undefined;
-      });
-    return this.defaultLoc;
   }
 
   async search(req: DiningSearchRequest): Promise<DiningSearchResponse> {

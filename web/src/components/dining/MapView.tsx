@@ -29,7 +29,7 @@ function loadMaps(key: string): Promise<any> {
 
 const css = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
-export function MapView(props: { apiKey: string; center: LatLng; places: PlaceSummary[]; units: "mi" | "km"; actions: PlaceActions }) {
+export function MapView(props: { apiKey: string; center: LatLng; places: PlaceSummary[]; actions: PlaceActions }) {
   const el = useRef<HTMLDivElement>(null);
   const map = useRef<any>(null);
   const markers = useRef<any[]>([]);
@@ -91,7 +91,7 @@ export function MapView(props: { apiKey: string; center: LatLng; places: PlaceSu
       <div ref={listRef} class="map-list">
         {props.places.map((p, i) => (
           <div key={p.id} data-id={p.id} class={focus === p.id ? "focused" : ""}>
-            <PlaceCard p={p} index={i} units={props.units} actions={props.actions} />
+            <PlaceCard p={p} index={i} actions={props.actions} />
           </div>
         ))}
       </div>

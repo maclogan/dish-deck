@@ -8,7 +8,6 @@ import { distanceText, priceText } from "./state";
 export function Compare(props: {
   open: boolean;
   places: PlaceSummary[];
-  units: "mi" | "km";
   onOpen: (p: PlaceSummary) => void;
   onRemove: (p: PlaceSummary) => void;
   onClose: () => void;
@@ -17,7 +16,7 @@ export function Compare(props: {
     { label: "Rating", value: (p) => (p.rating ? `★ ${p.rating.toFixed(1)} (${p.ratingCount ?? 0})` : "—") },
     { label: "Price", value: (p) => priceText(p.price) || "—" },
     { label: "Cuisine", value: (p) => p.cuisine ?? "—" },
-    { label: "Distance", value: (p) => distanceText(p.distanceMiles, props.units) },
+    { label: "Distance", value: (p) => distanceText(p.distanceMiles) },
     { label: "Open", value: (p) => (p.openAtTime === false ? "Closed then" : p.closesSoon ? "Closes soon" : p.hoursToday ?? "—") },
     { label: "Booking", value: (p) => p.reservation.label || "—" },
     { label: "Size", value: (p) => p.size?.label ?? "—" },

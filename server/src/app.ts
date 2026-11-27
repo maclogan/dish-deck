@@ -21,7 +21,7 @@ import { AiDining } from "./dining/ai.js";
 import { Chatter } from "./dining/chatter.js";
 import { PlacesClient } from "./dining/places.js";
 import { registerDining } from "./dining/routes.js";
-import { DiningService } from "./dining/service.js";
+import { DEFAULT_LOCATION, DEFAULT_RADIUS_MILES, DiningService, MAX_RADIUS_MILES } from "./dining/service.js";
 import type { AppConfigResponse } from "./types.js";
 
 const mealType = z.enum(["lunch", "dinner"]);
@@ -190,9 +190,6 @@ export function buildApp(
             ai: config.anthropicApiKey ? new AiDining(config.anthropicApiKey, config.anthropicModel) : undefined,
             chatter: config.searxngUrl ? new Chatter(config.searxngUrl) : undefined,
             timezone: config.timezone,
-            radiusMiles: config.diningRadiusMiles,
-            units: config.diningUnits,
-            defaultLocation: config.diningDefaultLocation,
             mapsBrowserKey: config.googleMapsBrowserKey,
             photoUrl: (name, width) => diningPhotoUrl(config.appPasscode, name, width),
             warn,
@@ -279,7 +276,14 @@ export function buildApp(
       meals: MEALS,
       goals: GOALS,
       styles: STYLES,
-      dining: dining?.config(true) ?? { enabled: false, chatter: false, radiusMiles: config.diningRadiusMiles, units: config.diningUnits, cuisines: [] },
+      dining: dining?.config(true) ?? {
+        enabled: false,
+        chatter: false,
+        radiusMiles: DEFAULT_RADIUS_MILES,
+        maxRadiusMiles: MAX_RADIUS_MILES,
+        defaultLocation: DEFAULT_LOCATION,
+        cuisines: [],
+      },
     };
   });
 

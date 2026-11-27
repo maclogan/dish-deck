@@ -176,8 +176,6 @@ function service(places: GPlace[], withAi = true) {
     store,
     ai: withAi ? ai.ai : undefined,
     timezone: "UTC",
-    radiusMiles: 3,
-    units: "mi",
     photoUrl: (name, w) => `/photo/${name}/${w}`,
     warn: () => undefined,
   });
@@ -278,8 +276,6 @@ const config: Config = {
   staples: [],
   webDir: "/nonexistent",
   googlePlacesBaseUrl: "https://places.test",
-  diningRadiusMiles: 3,
-  diningUnits: "mi",
   appPasscode: "secret",
 };
 
@@ -296,6 +292,7 @@ describe("dining routes", () => {
     const h = { "x-app-passcode": "secret" };
     expect((await app.inject({ method: "GET", url: "/api/dining/never" })).statusCode).toBe(401);
     expect((await app.inject({ method: "POST", url: "/api/dining/search", headers: h, payload: { location: { lat: 999, lng: 0 }, radiusMiles: 3 } })).statusCode).toBe(400);
+    expect((await app.inject({ method: "POST", url: "/api/dining/search", headers: h, payload: { location: HERE, radiusMiles: 30 } })).statusCode).toBe(400);
 
     await app.inject({ method: "POST", url: "/api/dining/never", headers: h, payload: { id: "place000001", name: "Place 1" } });
     const list = (await app.inject({ method: "GET", url: "/api/dining/never", headers: h })).json();
@@ -320,7 +317,7 @@ describe("dining routes", () => {
     const { svc } = service([], false);
     const app = buildApp(config, { store: new Store(":memory:"), dining: svc });
     const c = (await app.inject({ method: "GET", url: "/api/config" })).json();
-    expect(c.dining).toMatchObject({ enabled: true, radiusMiles: 3, units: "mi" });
+    expect(c.dining).toMatchObject({ enabled: true, radiusMiles: 3, maxRadiusMiles: 25, defaultLocation: { label: "Denver, CO" } });
     expect(c.dining.cuisines.length).toBeGreaterThan(20);
   });
 });
